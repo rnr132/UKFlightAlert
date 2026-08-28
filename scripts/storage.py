@@ -356,7 +356,22 @@ def ingest(body, origin_airport, observed_at=None, sweep_date=None):
     changed, updated_index = filter_changed(rows, index_df)
     path = write_delta(changed, sweep_date)
     save_index(updated_index)
-    return {"fetched": len(rows), "changed": len(changed), "delta_path": path}
+
+    cheapest = None
+    if not rows.empty:
+        best = rows.loc[rows["price_gbp"].idxmin()]
+        cheapest = {
+            "origin_airport": best["origin_airport"],
+            "destination": best["destination"],
+            "price_gbp": float(best["price_gbp"]),
+        }
+
+    return {
+        "fetched": len(rows),
+        "changed": len(changed),
+        "delta_path": path,
+        "cheapest": cheapest,
+    }
 
 
 def main():
