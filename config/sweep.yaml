@@ -1,0 +1,80 @@
+# Flight Deal Scanner — sweep configuration
+#
+# This file is data, not secrets: no token lives here. See PLAN.md for the
+# reasoning behind each choice below.
+
+api:
+  base_url: "https://api.travelpayouts.com"
+  # Auth via header, never query param (PLAN.md §2) — a token in a query
+  # string ends up in every logged URL, permanently, in this public repo.
+  token_env_var: "TRAVELPAYOUTS_TOKEN"
+  token_header: "X-Access-Token"
+
+  # Settled in step 1 by calling both live, not from docs (PLAN.md §2).
+  # /aviasales/v3/grouped_prices looked like the "everywhere" endpoint but
+  # isn't — it collapses to one fare per date across all destinations
+  # combined (85 of ~372 possible destinations ever appeared). prices_cheap
+  # is the real everywhere endpoint: 372 destinations in one call. Kept as
+  # a single confirmed endpoint rather than a candidate list now that the
+  # comparison is done.
+  endpoint:
+    name: prices_cheap
+    path: "/v1/prices/cheap"
+    params:
+      destination: "-"
+    month_param: depart_date
+
+market:
+  currency: "GBP"
+  market: "uk"
+  locale: "en"
+
+# Explicit airports, not the LON metro code (PLAN.md §3, revised in step 1) —
+# the live response never reports which airport a fare used, even when the
+# metro code is queried, so airport granularity only exists if it's put in
+# the request. Never blended into one baseline: STN budget fares and LHR
+# long-haul are bimodal and would wreck Phase 2 percentile scoring.
+origins:
+  - LHR
+  - LGW
+  - STN
+  - LTN
+  - LCY
+  - MAN
+  - BHX
+  - EDI
+  - GLA
+  - BRS
+
+destinations:
+  # destination=- ; curation can't discover the deal you weren't already
+  # looking for (PLAN.md §3). city-directions marks a priority subset for
+  # later use — it does not filter what gets swept.
+  mode: all
+  core_subset_source: "/v1/city-directions"
+
+horizon:
+  # Rolling from today, not a fixed calendar window (PLAN.md §3).
+  # Split matches the call budget in PLAN.md §2: 7 near months swept
+  # nightly, 12 far months swept weekly (19 months total — the brief's
+  # "~18 months" plus rounding from that split; flagged, not hidden).
+  near_months: 7
+  far_months: 12
+
+# Round-trip only for Phase 1 (PLAN.md §3, revised in step 1) — one_way is
+# silently ignored by prices_cheap, confirmed live. One-way at full-universe
+# scale would need a per-route endpoint, reintroducing the call-volume
+# problem the endpoint choice in §2 exists to avoid.
+trip_types:
+  - round_trip
+
+rate_limit:
+  # Throttled below the documented 60/min ceiling (PLAN.md §2) for jitter
+  # and retry headroom.
+  requests_per_minute: 50
+
+retention:
+  raw_days: 120
+  # Never mean-only — the cheap end of the distribution is the whole point
+  # and can't be reconstructed after raw rows are gone (PLAN.md §4).
+  rollup_stats: [min, p05, p25, p50, count]
