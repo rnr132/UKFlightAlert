@@ -18,19 +18,12 @@ import json
 import os
 import time
 from datetime import date
-from pathlib import Path
 
 import requests
-import yaml
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-CONFIG_PATH = REPO_ROOT / "config" / "sweep.yaml"
+from config import REPO_ROOT, load_config
+
 SCRATCH_DIR = REPO_ROOT / "scratch"
-
-
-def load_config(path=CONFIG_PATH):
-    with open(path, "r") as f:
-        return yaml.safe_load(f)
 
 
 def load_token(config):
