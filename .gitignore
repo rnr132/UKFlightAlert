@@ -1,0 +1,73 @@
+# ---------------------------------------------------------------------------
+# Flight Deal Scanner
+#
+# NOTE: the repo is the database. Swept price data under data/ is a
+# deliverable and MUST stay tracked — the nightly Action commits it back.
+# Do not add data/, *.parquet, or *.csv here. See the bottom of this file.
+# ---------------------------------------------------------------------------
+
+# --- Secrets -----------------------------------------------------------
+# Public repo. The Travelpayouts token lives in GitHub Secrets, never here.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets.yaml
+secrets.json
+config/secrets.*
+
+# --- Python bytecode / caches -----------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# --- Virtual environments ---------------------------------------------
+.venv/
+venv/
+env/
+ENV/
+.python-version
+
+# --- Packaging / build -------------------------------------------------
+build/
+dist/
+*.egg-info/
+*.egg
+.eggs/
+pip-wheel-metadata/
+
+# --- Test / type-check / lint caches -----------------------------------
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.hypothesis/
+
+# --- Notebooks ---------------------------------------------------------
+.ipynb_checkpoints/
+
+# --- Editors / OS ------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# --- Local scratch -----------------------------------------------------
+# Somewhere to dump --dry-run API responses without committing them.
+scratch/
+tmp/
+*.log
+
+# --- Deliberately NOT ignored ------------------------------------------
+# data/            price history — committed by the sweep workflow
+# *.parquet        the storage format; one file per month
+# config/*.yaml    sweep config is version-controlled
+# .env.example     documents required vars without holding values
