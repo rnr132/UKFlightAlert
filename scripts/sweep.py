@@ -352,6 +352,17 @@ def real_sweep(config, origin_filter=None):
                 sweep_one(session, config, token, token_header, base_url, limiter, origin, month, run_started_at, sweep_date, max_retries)
             )
 
+    # Maintenance runs every night, unconditionally — both are no-ops on
+    # fresh data (nothing old enough to fold or roll up yet) and cost
+    # nothing to call. Doing it here means one workflow step (`python
+    # sweep.py`) is the whole pipeline; without this, deltas would
+    # accumulate forever and the git-history-size problem the delta
+    # design exists to solve would come back by omission.
+    compact_result = storage.compact_deltas()
+    rollup_result = storage.rollup_stale(raw_days=config["retention"]["raw_days"])
+    print(f"\ncompact_deltas: {compact_result}")
+    print(f"rollup_stale: {rollup_result}")
+
     failures = [r for r in results if not r["ok"]]
     cheapest = min(
         (r["cheapest"] for r in results if r.get("cheapest")),
@@ -369,6 +380,8 @@ def real_sweep(config, origin_filter=None):
         "rows_fetched": sum(r["fetched"] for r in results),
         "rows_changed": sum(r["changed"] for r in results),
         "cheapest": cheapest,
+        "compact": compact_result,
+        "rollup": rollup_result,
     }
     append_heartbeat(heartbeat)
 
@@ -378,6 +391,12 @@ def real_sweep(config, origin_filter=None):
         print(f"\n{len(failures)} of {len(results)} origin-month calls failed:")
         for r in failures:
             print(f"  {r['origin']} {r['month']}: {r['detail']}")
+        # Exit non-zero so the Action shows red — a partial failure should
+        # look broken, not silently green (PATTERNS.md §4.4) — but
+        # everything successfully fetched above, plus this run's
+        # compaction/rollup, has already been written. The workflow commits
+        # it regardless of this exit code (PLAN.md §6, step 4): partial
+        # data beats no data, and the failure should still be visible.
         raise SystemExit(1)
 
     print("\nSweep complete, no failures.")
