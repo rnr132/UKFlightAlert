@@ -1,0 +1,65 @@
+name: Flight Deal Sweep
+
+"on":
+  schedule:
+    # 03:37 UTC daily — off the hour, since GitHub's scheduler is most
+    # congested at :00 and jobs queued there are the ones most likely to
+    # be delayed or dropped (PATTERNS.md). Scheduled runs are also
+    # best-effort and get disabled after 60 days of repo inactivity —
+    # see README for the mitigation.
+    - cron: "37 3 * * *"
+  workflow_dispatch: {}
+  # Manual trigger: replays a missed morning by hand, and is the API
+  # surface an external scheduler would call if GitHub's own schedule is
+  # ever disabled (PATTERNS.md's pattern, carried over deliberately).
+
+permissions:
+  contents: write
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+          cache: "pip" # keyed off requirements.txt automatically
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run sweep
+        # Caps a hung HTTP call or a runaway retry loop — same reasoning
+        # as PATTERNS.md's timeout-minutes on its digest step. The job-
+        # level 20-minute cap above is the outer backstop covering
+        # checkout/setup/install/commit too.
+        timeout-minutes: 15
+        env:
+          # Step-scoped, env-injected, never argv — PATTERNS.md's pattern
+          # for a public repo, carried over deliberately. sweep.py reads
+          # this via os.environ.get, never as a CLI argument.
+          TRAVELPAYOUTS_TOKEN: ${{ secrets.TRAVELPAYOUTS_TOKEN }}
+        run: python scripts/sweep.py
+
+      - name: Commit data
+        # Runs even if the sweep step above failed (a partial-failure
+        # night should still commit whatever it did fetch — see the
+        # comment in real_sweep()), but not if the run was manually
+        # cancelled mid-flight.
+        if: ${{ !cancelled() }}
+        run: |
+          git config user.name "flightalert-bot"
+          git config user.email "flightalert-bot@users.noreply.github.com"
+          git add data/
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Sweep: $(date -u +'%Y-%m-%d %H:%M UTC')"
+            git pull --rebase --autostash
+            git push
+          fi
