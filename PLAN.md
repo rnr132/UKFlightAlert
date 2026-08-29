@@ -149,3 +149,105 @@ Small commits throughout.
 - **Cache depth on thin routes.** Some `(origin, destination, month)` cells will never get enough observations to support a percentile. Phase 1 should mark observation counts so Phase 2 can refuse to score them, rather than scoring them badly.
 - **Data is 2-7 days stale by construction.** Constrains the product promise, exactly as the brief says. A genuine mistake fare dies in hours, well inside that latency, so this can never be a flash-deal alerter — only structural cheapness (capacity dumps, new routes, off-peak) survives long enough to still be true when someone reads the alert. Frame it that way in the README (weekly, no urgency language) before Phase 2 exists to contradict it.
 - **Twelve months, not four weeks, until "is this cheap for the season" is answerable.** The four-week accumulation in the brief builds a real baseline for lead-time comparison (§3), but not for seasonal comparison — that needs a full year, because it requires having seen a given month before. Worth saying plainly so year one isn't read as a shortfall against a bar the design never targeted.
+
+---
+
+# Phase 2 Plan — Deal Detection
+
+Status: **built and verified against synthetic scenarios** (2026-08-29). Real
+data can't exercise the flag logic yet — see the eligibility note below —
+but every branch of the algorithm has been checked against constructed
+cases, and the whole pipeline runs clean against real production data,
+correctly finding nothing.
+
+Scoped to detection only, not delivery — an explicit choice, not a default:
+asked which half of "output" to build first, and detection was picked so
+it's ready to tune the moment enough real history exists, rather than
+being designed only after the wait is already over.
+
+## What it does
+
+For every flight whose price changed *tonight* (this is deliberately not
+"every flight, every night" — a flight whose price didn't move can't
+possibly be a new low it wasn't already yesterday, so re-checking it is
+wasted work against the brief's "cheap query" goal):
+
+1. **Eligibility gate:** skip it unless it's been observed on at least
+   `detection.min_observations` (5) distinct nights. Directly implements
+   the plan already recorded in this file's Risks section above — "Phase 1
+   should mark observation counts so Phase 2 can refuse to score them."
+2. **Flag condition, both required:** tonight's price is a genuine new low
+   for that exact flight (same route, same date, same trip type) **and**
+   at least `detection.drop_pct_threshold` (15%) below its own recent
+   median. Either alone is too weak — "always cheap" would flag forever on
+   new-low alone; "slightly cheaper than usual" would flag on the % test
+   alone without being a real low.
+3. **Output:** `data/flags/YYYY-MM-DD.jsonl`, one line per flag, only
+   created on nights with something to say (mirrors `write_delta()`'s
+   "empty result is valid, don't write an empty file" convention). Nothing
+   gets sent anywhere — this is a record, not an alert.
+
+Verified against constructed scenarios (real data has no eligible route
+yet): a genuine 29%-below-median new low flagged correctly; a new low that
+was only 12% below median correctly did not flag; a route with a huge drop
+but only 3-4 observations correctly did not flag despite the drop size —
+the eligibility gate held even under a strong incentive to fire.
+
+## One empirical check done before committing to this design
+
+The whole "compare a fare against its own recent trend" idea only works if
+the API keeps returning the *same specific flight* night after night,
+rather than jumping between different dates within a queried month. Tested
+directly rather than assumed: a fresh live fetch matched an existing index
+key on **96% of returned flights**. The signal is real, not a nice idea
+sitting on top of noise.
+
+## What changed in storage.py to make this possible
+
+The index (`data/index/latest.parquet`) previously tracked only the latest
+price hash per key. It now also tracks `observation_count`, `first_seen`,
+`last_seen` — updated for *every* key touched by a sweep, changed or not,
+which is what makes "seen on N distinct nights" a real counted fact rather
+than a proxy for "the price happened to move N times." An index written
+before this existed migrates automatically: missing columns backfill to
+`observation_count=1` (conservative — undercounts real history, never
+overcounts) rather than requiring a one-off backfill script.
+
+**Real consequence worth knowing:** this was added on 2026-08-29, after
+three real sweep nights had already run. The migration doesn't credit
+those pre-existing nights — every key's counter effectively restarts from
+the day this shipped. The 5-night eligibility gate is about 2-3 days later
+in practice than it would have been if this had been built in from day
+one. Not a bug, just the honest cost of adding this after the fact rather
+than up front.
+
+`storage.load_full_history()` is new too — the first thing that needed a
+flight's complete history regardless of whether it's sitting in an
+uncompacted delta or an already-folded monthly file, since nothing before
+detect.py needed to read both shapes at once.
+
+**A real bug caught by testing before it shipped:** `.values` on a
+timezone-aware pandas Series silently strips timezone-awareness — found
+because the extended test suite compared `first_seen` against `last_seen`
+and got a tz-naive-vs-tz-aware crash, not because it was spotted by
+inspection. Fixed by assigning the Series directly instead of `.values`,
+and by making every new timestamp column explicitly tz-aware from
+construction rather than letting pandas infer a dtype that a later parquet
+round-trip could silently degrade.
+
+## What's still open
+
+- **Delivery.** Explicitly deferred — flags are written to a file, read by
+  no one yet. Telegram bot per the original brief is the obvious next
+  candidate, its own separate scope.
+- **Retention-boundary interaction, unresolved by design.** A far-tier
+  flight swept for close to its full ~19-month life could have early
+  history rolled into a weekly summary (`data/rollups/`) before it's ever
+  close enough to flag — `detect.py` only reads raw history
+  (`load_full_history()`), not rollups. For now this just means a shorter
+  comparison window for such a flight, not a wrong one. Revisit only if
+  this turns out to matter in practice.
+- **Tuning `min_observations` and `drop_pct_threshold` against real
+  signal** — both are config values precisely so this doesn't need a code
+  change once there's enough real history to know whether 5 nights and
+  15% are the right numbers.

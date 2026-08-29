@@ -1,12 +1,12 @@
-# Flight Deal Scanner — Phase 1
+# Flight Deal Scanner
 
-A nightly job that sweeps flight prices from six UK airports across a
-rolling ~18-month horizon into a growing price history. **Phase 1 only:**
-no alerting, no scoring, no front end, no per-user config. The point of
-this phase is purely to accumulate a real baseline — see
-[Brief.md](Brief.md) for the full scope and [PLAN.md](PLAN.md) for the
-architecture and every decision behind it (including three corrections
-made after comparing assumptions against the live API in step 1).
+A nightly job that sweeps flight prices from 10 UK airports across a
+rolling ~18-month horizon into a growing price history, and flags flights
+that have genuinely dropped against their own recent trend. No alerting,
+no front end, no per-user config yet — see [Brief.md](Brief.md) for
+Phase 1's original scope, and [PLAN.md](PLAN.md) for the architecture and
+every decision behind both phases (including several corrections made
+after comparing assumptions against the live API).
 
 ## What this is, and isn't
 
@@ -17,13 +17,19 @@ made after comparing assumptions against the live API in step 1).
   — the kind of thing still true a week later. Any future alerting should
   read as "this route looks unusually cheap right now," weekly cadence,
   never "book this exact seat."
-- **Not a percentile scorer yet.** No deal detection exists in Phase 1.
-  When it's built, year one will compare a fare against its own recent
-  trend (lead time out from departure), not against "is this normal for
-  April" — a seasonal comparison needs having seen a previous April, which
-  needs about 12 months of history, not four weeks.
+- **Detection compares a flight against its own history, not a season.**
+  A route is only scored once it's been observed on 5+ distinct nights,
+  and flags only when tonight's price is both a genuine new low and well
+  below its own recent median (`scripts/detect.py` — see PLAN.md's Phase 2
+  section). Comparing against "is this normal for April" needs having seen
+  a previous April — about 12 months of history, not weeks — so that kind
+  of seasonal comparison isn't attempted yet.
+- **Detection finds; it doesn't tell anyone.** Flags are written to
+  `data/flags/` and read by no one. No Telegram, no email, no digest —
+  delivery is a separate, later, not-yet-scoped piece of work.
 - **The repo is the database.** There's no server. Every night's prices
-  are committed back into `data/` by the GitHub Action itself.
+  (and any flags) are committed back into `data/` by the GitHub Action
+  itself.
 
 ## Setup
 
@@ -84,9 +90,10 @@ python scripts/sweep.py --origin LHR
 # Real sweep, every origin in config/sweep.yaml — what the Action runs nightly
 python scripts/sweep.py
 
-# Maintenance (also runs automatically at the end of every sweep — see below)
+# Maintenance + detection (also run automatically at the end of every sweep)
 python scripts/storage.py --stats
 python scripts/storage.py --compact --rollup
+python scripts/detect.py --date 2026-09-15   # re-check a specific past night
 ```
 
 A sweep exits non-zero if any origin-month call ultimately failed after
@@ -108,10 +115,13 @@ data/
                              collapsed to weekly min/p05/p25/p50/count —
                              never mean-only, the cheap end of the
                              distribution is the whole point
-  index/latest.parquet       last-known price hash per route — how a
-                             fresh checkout knows what "changed" means
+  index/latest.parquet       last-known price hash + observation count per
+                             route — how a fresh checkout knows both "what
+                             changed" and "is this route eligible to score"
+  flags/YYYY-MM-DD.jsonl     deals detect.py found that night — only
+                             created on nights with something to say
   heartbeat.jsonl            one line per run: rows fetched/changed,
-                             failures, cheapest fare seen
+                             failures, cheapest fare seen, flags found
 ```
 
 Deltas exist because Parquet is compressed binary — a one-row change
@@ -153,6 +163,7 @@ scripts/
   config.py   shared config/path loading
   sweep.py    fetch, throttle, retry, ingest, heartbeat
   storage.py  normalize, delta write, compaction, rollup
+  detect.py   deal detection — flags a genuine new low vs. own history
 .github/workflows/sweep.yml  the nightly Action
 data/                        the accumulating price history (see above)
 ```

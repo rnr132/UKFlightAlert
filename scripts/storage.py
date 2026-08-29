@@ -56,6 +56,7 @@ ROW_COLUMNS = KEY_COLUMNS + [
     "observed_at",
     "price_hash",
 ]
+INDEX_COLUMNS = KEY_COLUMNS + ["price_hash", "observation_count", "first_seen", "last_seen"]
 
 
 def _today_utc():
@@ -141,10 +142,43 @@ def normalize_response(body, origin_airport, observed_at=None):
     return pd.DataFrame(rows, columns=ROW_COLUMNS)
 
 
+def _empty_timestamp_series(index):
+    """An all-NaT column that's explicitly tz-aware UTC from the start.
+
+    Left implicit, pandas gives an empty/NaT datetime column a generic
+    dtype that silently loses timezone-awareness on the next parquet
+    round-trip — found by testing, not by inspection — and then a later
+    comparison against a genuinely tz-aware timestamp raises rather than
+    quietly doing the wrong thing. Being explicit here avoids the whole
+    class of bug instead of patching one occurrence of it.
+    """
+    return pd.Series(pd.NaT, index=index, dtype="datetime64[ns, UTC]")
+
+
 def load_index():
-    if INDEX_PATH.exists():
-        return pd.read_parquet(INDEX_PATH)
-    return pd.DataFrame(columns=KEY_COLUMNS + ["price_hash"])
+    if not INDEX_PATH.exists():
+        empty = pd.DataFrame(columns=INDEX_COLUMNS)
+        empty["observation_count"] = empty["observation_count"].astype("int64")
+        empty["first_seen"] = _empty_timestamp_series(empty.index)
+        empty["last_seen"] = _empty_timestamp_series(empty.index)
+        return empty
+
+    index_df = pd.read_parquet(INDEX_PATH)
+    # Migrate an index written before observation tracking existed, rather
+    # than requiring a one-off backfill script. observation_count=1 for
+    # every pre-existing key undercounts their true history (they may have
+    # been seen several nights already) — never overcounts — so it just
+    # means Phase 2's 5-night eligibility gate (PLAN.md §7's plan, now
+    # built) takes a little longer to clear for keys that predate this
+    # column than it "truly" should. Safe, and simpler than trying to
+    # reconstruct counts that were never recorded.
+    if "observation_count" not in index_df.columns:
+        index_df["observation_count"] = 1
+    if "first_seen" not in index_df.columns:
+        index_df["first_seen"] = _empty_timestamp_series(index_df.index)
+    if "last_seen" not in index_df.columns:
+        index_df["last_seen"] = _empty_timestamp_series(index_df.index)
+    return index_df
 
 
 def save_index(index_df):
@@ -155,28 +189,49 @@ def save_index(index_df):
 def filter_changed(rows_df, index_df):
     """Split freshly-fetched rows into (changed_rows, updated_index).
 
-    A row counts as changed if its key isn't in the index yet, or its
-    price_hash differs from what's there. Unrelated existing index entries
-    (routes not touched by this call) pass through untouched.
+    A row counts as changed (and gets written to tonight's delta) if its
+    key isn't in the index yet, or its price_hash differs from what's
+    there. But *every* key fetched tonight — changed or not — gets its
+    observation bookkeeping updated: this is what makes "seen on N
+    different nights" (Phase 2's eligibility gate) a real counted fact
+    rather than a guess from how often the price happened to move.
+    Unrelated existing index entries (routes not touched by this call)
+    pass through untouched.
     """
     if rows_df.empty:
         return rows_df, index_df
 
     merged = rows_df.merge(
-        index_df[KEY_COLUMNS + ["price_hash"]],
+        index_df[KEY_COLUMNS + ["price_hash", "observation_count", "first_seen"]],
         on=KEY_COLUMNS,
         how="left",
         suffixes=("", "_known"),
     )
-    changed_mask = merged["price_hash_known"].isna() | (
-        merged["price_hash"] != merged["price_hash_known"]
-    )
+    is_new_key = merged["price_hash_known"].isna()
+    changed_mask = is_new_key | (merged["price_hash"] != merged["price_hash_known"])
     changed = rows_df[changed_mask.values].reset_index(drop=True)
+
+    updated_rows = rows_df[KEY_COLUMNS + ["price_hash", "observed_at"]].copy()
+    updated_rows["observation_count"] = (
+        merged["observation_count"].fillna(0).infer_objects(copy=False).astype("int64") + 1
+    ).values
+    # NOT `.values` here — `.values` on a tz-aware Series silently strips
+    # timezone-awareness (a real, found-by-testing pandas gotcha), which
+    # then makes this column incomparable to genuinely tz-aware timestamps
+    # later. `merged` and `updated_rows` share row order/count from the
+    # left join above (index_df's keys are unique by construction), so
+    # assigning the Series directly aligns correctly.
+    updated_rows["first_seen"] = merged["first_seen"]
+    updated_rows.loc[is_new_key.values, "first_seen"] = updated_rows.loc[
+        is_new_key.values, "observed_at"
+    ]
+    updated_rows["last_seen"] = updated_rows["observed_at"]
+    updated_rows = updated_rows.drop(columns=["observed_at"])
 
     untouched = index_df[
         ~index_df.set_index(KEY_COLUMNS).index.isin(rows_df.set_index(KEY_COLUMNS).index)
     ]
-    parts = [p for p in (untouched, rows_df[KEY_COLUMNS + ["price_hash"]]) if not p.empty]
+    parts = [p for p in (untouched, updated_rows) if not p.empty]
     updated_index = pd.concat(parts, ignore_index=True) if parts else index_df
     return changed, updated_index
 
@@ -324,6 +379,33 @@ def rollup_stale(as_of=None, raw_days=120):
             recent.to_parquet(monthly_path, index=False, compression="zstd")
 
     return summary
+
+
+def load_full_history(depart_months=None):
+    """Every recorded price row for the given depart_months (default: all),
+    combining not-yet-compacted deltas with compacted monthly files.
+
+    Nothing else in storage.py needed to read both sources together before
+    — sweeps only ever write, compaction only ever moves data from one
+    shape to the other. detect.py (Phase 2) is the first thing that needs
+    a flight's *complete* history regardless of which shape it's currently
+    sitting in, so this is the one place that combines them.
+    """
+    frames = []
+    if MONTHLY_DIR.exists():
+        for f in sorted(MONTHLY_DIR.glob("*.parquet")):
+            if depart_months is None or f.stem in depart_months:
+                frames.append(pd.read_parquet(f))
+    if DELTA_DIR.exists():
+        for f in sorted(DELTA_DIR.glob("*.parquet")):
+            df = pd.read_parquet(f)
+            if depart_months is not None:
+                df = df[df["depart_month"].isin(depart_months)]
+            if not df.empty:
+                frames.append(df)
+    if not frames:
+        return pd.DataFrame(columns=ROW_COLUMNS)
+    return pd.concat(frames, ignore_index=True)
 
 
 def stats():

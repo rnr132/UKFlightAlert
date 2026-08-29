@@ -87,6 +87,17 @@ retention:
   # and can't be reconstructed after raw rows are gone (PLAN.md §4).
   rollup_stats: [min, p05, p25, p50, count]
 
+detection:
+  # A flight isn't scored until it's been observed on at least this many
+  # distinct nights — guards against flagging noise from 1-2 data points
+  # (PLAN.md §7's plan for Phase 2, now built as scripts/detect.py).
+  min_observations: 5
+  # Flag only when tonight's price is a genuine new low AND at least this
+  # fraction below its own recent median. Either condition alone is too
+  # weak on its own — see PLAN.md's Phase 2 section for why both are
+  # required together.
+  drop_pct_threshold: 0.15
+
 monitoring:
   # If the newest heartbeat is older than this when a run starts, print a
   # loud warning (PATTERNS.md §4.4's fix, applied from day one). 36h gives

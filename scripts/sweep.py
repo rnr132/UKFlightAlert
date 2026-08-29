@@ -29,6 +29,7 @@ from datetime import date, datetime, timezone
 
 import requests
 
+import detect
 import storage
 from config import REPO_ROOT, load_config
 
@@ -363,6 +364,15 @@ def real_sweep(config, origin_filter=None):
     print(f"\ncompact_deltas: {compact_result}")
     print(f"rollup_stale: {rollup_result}")
 
+    # Phase 2: pure arithmetic over tonight's changed rows, no API calls.
+    # Safe to run every night unconditionally — on data too young to have
+    # any route past the observation-count gate yet, this just finds
+    # nothing, the same way compact/rollup are no-ops on data too young
+    # to touch.
+    flags = detect.detect(sweep_date, config=config)
+    flags_path = detect.write_flags(flags, sweep_date)
+    print(f"detect: {len(flags)} flagged" + (f" -> {flags_path}" if flags_path else ""))
+
     failures = [r for r in results if not r["ok"]]
     cheapest = min(
         (r["cheapest"] for r in results if r.get("cheapest")),
@@ -382,6 +392,7 @@ def real_sweep(config, origin_filter=None):
         "cheapest": cheapest,
         "compact": compact_result,
         "rollup": rollup_result,
+        "flags_found": len(flags),
     }
     append_heartbeat(heartbeat)
 
