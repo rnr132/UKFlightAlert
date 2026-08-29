@@ -48,6 +48,32 @@ that's a suggestion, not something from the brief.
 
 ---
 
+## Decide the delivery mechanism (Telegram is ruled out)
+
+`Brief.md` mentioned a Telegram bot as one example of out-of-scope Phase 1
+delivery, never a firm commitment — but it's now been explicitly ruled out
+as infeasible (2026-08-29, reason not recorded — ask if it matters later).
+No replacement chosen yet; asked directly and the answer was to hold the
+decision rather than guess.
+
+**Not urgent:** `scripts/detect.py` (Phase 2) already works standalone —
+flags land in `data/flags/`, read by no one. Nothing about detection
+depends on this being resolved. This only matters once there's an actual
+appetite to have flagged deals reach a person rather than a file.
+
+**Candidates raised and not chosen, for when this comes back up:**
+- **Email** — SMTP + a Gmail app password, the same credential pattern
+  `PATTERNS.md` already documents for IMAP fetch, just sending instead of
+  reading. Fits the free/zero-maintenance constraint directly.
+- **Discord webhook** — trivial to build (one HTTP POST per flag), free,
+  but only useful if the intended recipients already coordinate there.
+- **WhatsApp** — most likely to actually reach family day to day, but the
+  official Business API needs Meta business verification and typically
+  has per-message costs — doesn't fit the brief's zero-cost constraint as
+  cleanly as the others. Worth a closer look if this is still wanted.
+
+---
+
 ## Re-pin GitHub Actions to newer SHAs
 
 `actions/checkout` and `actions/setup-python` are pinned to specific commit

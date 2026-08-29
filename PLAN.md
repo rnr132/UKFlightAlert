@@ -238,8 +238,12 @@ round-trip could silently degrade.
 ## What's still open
 
 - **Delivery.** Explicitly deferred — flags are written to a file, read by
-  no one yet. Telegram bot per the original brief is the obvious next
-  candidate, its own separate scope.
+  no one yet, its own separate scope. Correction: this originally said
+  "Telegram bot per the original brief is the obvious next candidate" —
+  overstated. `Brief.md` only ever listed Telegram as one example of
+  out-of-scope notification delivery, not a firm commitment, and it's now
+  been ruled out as infeasible (2026-08-29). The actual mechanism is an
+  open question again.
 - **Retention-boundary interaction, unresolved by design.** A far-tier
   flight swept for close to its full ~19-month life could have early
   history rolled into a weekly summary (`data/rollups/`) before it's ever
