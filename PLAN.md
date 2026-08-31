@@ -235,6 +235,42 @@ and by making every new timestamp column explicitly tz-aware from
 construction rather than letting pandas infer a dtype that a later parquet
 round-trip could silently degrade.
 
+## A second real bug, found only after real flags fired (2026-08-31)
+
+`observation_count` incremented once per **sweep run**, not once per
+**calendar night**. On 2026-08-29, three runs happened on the same UTC day
+— one scheduled, plus two of mine (a local test and a manual
+`workflow_dispatch`, both while building this feature) — and every LHR key
+that already existed got incremented twice for what was really one day.
+Two routes (`LHR→YOW`, `LHR→VLC`) rode that inflation to `observation_count:
+5` on 2026-08-31 and flagged: both real 15%+ drops, but on a baseline that
+was really 4 independent nights, not 5.
+
+**Fix:** `filter_changed()` now checks whether a key's `last_seen` is
+already stamped with today's date before incrementing — a same-day rerun
+(retry, manual verification) no longer double-counts. Verified against the
+exact real scenario (three timestamps on one day, then a genuine next day)
+before trusting it.
+
+**Correcting the already-inflated data was only possible approximately, and
+that limit is worth recording plainly.** The two flagged keys were
+verifiably part of the original migration baseline (`first_seen: NaT`), so
+decrementing them from 5 to 4 is exact. But finding *every* similarly
+affected key ran into a real structural limit: changed-rows-only storage
+never records "checked, price unchanged" — only price changes get written
+anywhere — so there's no stored trace of which specific keys were touched
+by *both* Aug-29 runs versus touched by only one, or not at all that day.
+Both produce indistinguishable final counts. Resolved in the safe
+direction rather than left unresolved: every LHR baseline key
+(`first_seen.isna()`) had its count decremented by 1, floored at 1 (so
+keys never touched since the baseline, correctly still at 1, are
+untouched). This may delay a handful of genuinely-unaffected routes by one
+extra night before they're eligible — a small, harmless cost, chosen
+deliberately over the alternative of leaving some routes wrongly eligible
+a night early, which is the actual failure this whole fix exists to
+prevent. 1,808 LHR keys were touched by the correction; 899 of them had
+already reached `observation_count: 5` and are now correctly back at 4.
+
 ## What's still open
 
 - **Delivery.** Explicitly deferred — flags are written to a file, read by

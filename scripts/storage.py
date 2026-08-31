@@ -202,7 +202,7 @@ def filter_changed(rows_df, index_df):
         return rows_df, index_df
 
     merged = rows_df.merge(
-        index_df[KEY_COLUMNS + ["price_hash", "observation_count", "first_seen"]],
+        index_df[KEY_COLUMNS + ["price_hash", "observation_count", "first_seen", "last_seen"]],
         on=KEY_COLUMNS,
         how="left",
         suffixes=("", "_known"),
@@ -211,10 +211,24 @@ def filter_changed(rows_df, index_df):
     changed_mask = is_new_key | (merged["price_hash"] != merged["price_hash_known"])
     changed = rows_df[changed_mask.values].reset_index(drop=True)
 
+    # observation_count increments at most once per calendar day, not once
+    # per sweep run — found the hard way when a manual verification
+    # trigger and the natural nightly run both landed on 2026-08-29,
+    # double-counting every LHR key that already existed and letting two
+    # routes reach "5 nights" on data that was really 4 (PLAN.md's Phase 2
+    # section has the full story). A second run later the same day now
+    # sees last_seen already stamped with today's date and skips the
+    # increment; a genuinely new calendar day always increments.
+    last_seen_date = merged["last_seen"].dt.date
+    today_date = rows_df["observed_at"].dt.date
+    already_counted_today = (~is_new_key) & (last_seen_date == today_date)
+    increment = (~already_counted_today).astype("int64")
+
     updated_rows = rows_df[KEY_COLUMNS + ["price_hash", "observed_at"]].copy()
     updated_rows["observation_count"] = (
-        merged["observation_count"].fillna(0).infer_objects(copy=False).astype("int64") + 1
-    ).values
+        merged["observation_count"].fillna(0).infer_objects(copy=False).astype("int64")
+        + increment.values
+    )
     # NOT `.values` here — `.values` on a tz-aware Series silently strips
     # timezone-awareness (a real, found-by-testing pandas gotcha), which
     # then makes this column incomparable to genuinely tz-aware timestamps
