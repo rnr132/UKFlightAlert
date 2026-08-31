@@ -1,0 +1,2 @@
+{"flagged_at": "2026-08-31", "origin_airport": "LHR", "destination": "YOW", "depart_date": "2026-10-24", "return_date": "2026-11-07", "trip_type": "round_trip", "price_gbp": 501.0, "prior_min_gbp": 595.0, "prior_median_gbp": 595.0, "drop_pct_vs_median": 0.158, "observation_count": 5}
+{"flagged_at": "2026-08-31", "origin_airport": "LHR", "destination": "VLC", "depart_date": "2026-11-11", "return_date": "2026-11-18", "trip_type": "round_trip", "price_gbp": 104.0, "prior_min_gbp": 123.0, "prior_median_gbp": 123.0, "drop_pct_vs_median": 0.154, "observation_count": 5}
