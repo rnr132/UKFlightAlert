@@ -271,15 +271,38 @@ a night early, which is the actual failure this whole fix exists to
 prevent. 1,808 LHR keys were touched by the correction; 899 of them had
 already reached `observation_count: 5` and are now correctly back at 4.
 
-## What's still open
+## Delivery — email digest (scripts/notify.py, 2026-09-01)
 
-- **Delivery.** Explicitly deferred — flags are written to a file, read by
-  no one yet, its own separate scope. Correction: this originally said
-  "Telegram bot per the original brief is the obvious next candidate" —
-  overstated. `Brief.md` only ever listed Telegram as one example of
-  out-of-scope notification delivery, not a firm commitment, and it's now
-  been ruled out as infeasible (2026-08-29). The actual mechanism is an
-  open question again.
+Built after Telegram was ruled out and email was chosen directly (no
+Discord group already in use; WhatsApp's official API breaks the brief's
+zero-cost constraint). Weekly, not per-night — the project had already
+committed to "weekly signal, not real-time alert, no urgency language" in
+README.md and this section before any delivery mechanism existed, and a
+per-night email would have quietly contradicted that.
+
+- Reads the last 7 days of `data/flags/*.jsonl`, plain-text template, no
+  LLM involved anywhere.
+- Skips silently on a non-digest-day or a quiet week — same convention as
+  `write_delta()`/`write_flags()`.
+- `notify.digest_weekday` matches `far_sweep_weekday` (Sunday) — one
+  predictable weekly rhythm for the whole system rather than two.
+- Recipients and SMTP credentials are env vars only
+  (`SMTP_USER`/`SMTP_PASSWORD`/`NOTIFY_RECIPIENTS`) — real people's email
+  addresses can't live in this public repo's committed config, unlike
+  everything in `config/sweep.yaml` so far.
+
+**Verified without ever sending a real email:** the 7-day window
+correctly excludes a flag from 9 days back while including ones from
+4-6 days back; missing credentials and empty recipients both fail loudly
+before any SMTP connection is attempted, not partway through; a
+non-digest-day with `--force` still builds the digest correctly.
+
+**Deliberately not wired into the automatic pipeline yet.** Per the plan
+agreed before building: one real test email needs to go to an address the
+user chooses (most likely their own) for format review — the same
+"verify against one origin before the full set" principle applied to
+delivery — before this touches the real recipient list or the nightly
+workflow.
 - **Retention-boundary interaction, unresolved by design.** A far-tier
   flight swept for close to its full ~19-month life could have early
   history rolled into a weekly summary (`data/rollups/`) before it's ever

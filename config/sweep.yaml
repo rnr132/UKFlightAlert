@@ -104,3 +104,21 @@ monitoring:
   # slack beyond the ~24h nightly cadence before treating lateness as a
   # problem worth flagging on every subsequent run.
   staleness_warning_hours: 36
+
+notify:
+  # Weekly digest, not per-night — matches what README.md and PLAN.md
+  # already committed to before a delivery mechanism was even chosen:
+  # "weekly signal, not real-time alert, no urgency language." Same day
+  # as far_sweep_weekday above, for one predictable weekly rhythm across
+  # the whole system rather than two different cadences to track.
+  digest_weekday: 6  # Sunday
+  smtp_host: "smtp.gmail.com"
+  smtp_port: 587
+  # None of these are secrets themselves — they're the *names* of env
+  # vars holding secrets, read via os.environ.get, matching every other
+  # credential in this project (PATTERNS.md §2's pattern). The actual
+  # sender address, password, and recipient list never belong in this
+  # committed, public file.
+  sender_env_var: "SMTP_USER"
+  password_env_var: "SMTP_PASSWORD"
+  recipients_env_var: "NOTIFY_RECIPIENTS"
