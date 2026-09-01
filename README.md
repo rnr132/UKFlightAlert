@@ -24,9 +24,12 @@ after comparing assumptions against the live API).
   section). Comparing against "is this normal for April" needs having seen
   a previous April — about 12 months of history, not weeks — so that kind
   of seasonal comparison isn't attempted yet.
-- **Detection finds; it doesn't tell anyone.** Flags are written to
-  `data/flags/` and read by no one. No Telegram, no email, no digest —
-  delivery is a separate, later, not-yet-scoped piece of work.
+- **Detection finds; delivery exists but isn't live yet.**
+  `scripts/notify.py` builds a weekly email digest of flagged deals — but
+  it's deliberately not wired into the nightly workflow, and hasn't sent a
+  real email to anyone yet. One test send to a single chosen address
+  needs to happen first (see below), same as verifying one origin before
+  the full sweep.
 - **The repo is the database.** There's no server. Every night's prices
   (and any flags) are committed back into `data/` by the GitHub Action
   itself.
@@ -94,6 +97,10 @@ python scripts/sweep.py
 python scripts/storage.py --stats
 python scripts/storage.py --compact --rollup
 python scripts/detect.py --date 2026-09-15   # re-check a specific past night
+
+# Weekly digest email -- NOT wired into the automatic pipeline yet
+python scripts/notify.py --dry-run           # build it, print it, send nothing
+python scripts/notify.py --test you@x.com    # ONE real email, for format review
 ```
 
 A sweep exits non-zero if any origin-month call ultimately failed after
@@ -164,6 +171,7 @@ scripts/
   sweep.py    fetch, throttle, retry, ingest, heartbeat
   storage.py  normalize, delta write, compaction, rollup
   detect.py   deal detection — flags a genuine new low vs. own history
+  notify.py   weekly email digest — built, not yet wired in (see above)
 .github/workflows/sweep.yml  the nightly Action
 data/                        the accumulating price history (see above)
 ```
