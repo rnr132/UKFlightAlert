@@ -48,29 +48,38 @@ that's a suggestion, not something from the brief.
 
 ---
 
-## Decide the delivery mechanism (Telegram is ruled out)
+## Waiting on Yahoo account aging before the live test send (2026-09-XX)
 
-`Brief.md` mentioned a Telegram bot as one example of out-of-scope Phase 1
-delivery, never a firm commitment — but it's now been explicitly ruled out
-as infeasible (2026-08-29, reason not recorded — ask if it matters later).
-No replacement chosen yet; asked directly and the answer was to hold the
-decision rather than guess.
+Delivery mechanism is decided (email, weekly digest) and `scripts/notify.py`
+is fully built and tested — see `PLAN.md`'s delivery section. Telegram was
+ruled out; Gmail, Proton, Outlook.com, and Zoho were all considered as the
+sender and each hit a real wall (account-creation rate limits after
+creating several new accounts in one week; Proton free tier can't send
+without a paid-plan Bridge setup or a Business-tier SMTP token; Outlook.com
+is retiring basic-auth app passwords for real OAuth2; Zoho's clean free
+tier is tied to owning a custom domain). Yahoo Mail is the one with no
+structural blocker — but a **new** Yahoo account can't generate an app
+password until it looks like an established one to Yahoo's own fraud
+heuristics, no published timeframe, anecdotally days to weeks.
 
-**Not urgent:** `scripts/detect.py` (Phase 2) already works standalone —
-flags land in `data/flags/`, read by no one. Nothing about detection
-depends on this being resolved. This only matters once there's an actual
-appetite to have flagged deals reach a person rather than a file.
+**What's actually pending:** the Yahoo account needs to age into
+eligibility. Worth *using* it normally in the meantime (logging in,
+sending/receiving a few real emails) rather than leaving it dormant, since
+"consistent normal usage" is the literal criterion.
 
-**Candidates raised and not chosen, for when this comes back up:**
-- **Email** — SMTP + a Gmail app password, the same credential pattern
-  `PATTERNS.md` already documents for IMAP fetch, just sending instead of
-  reading. Fits the free/zero-maintenance constraint directly.
-- **Discord webhook** — trivial to build (one HTTP POST per flag), free,
-  but only useful if the intended recipients already coordinate there.
-- **WhatsApp** — most likely to actually reach family day to day, but the
-  official Business API needs Meta business verification and typically
-  has per-message costs — doesn't fit the brief's zero-cost constraint as
-  cleanly as the others. Worth a closer look if this is still wanted.
+**Nothing else is blocked by this.** The nightly sweep, detection, and
+retention pipeline all run independently of delivery being resolved.
+
+**Once the app password works:**
+1. `python scripts/notify.py --test <address>` — one real email, format
+   review, before anyone else ever sees one.
+2. Update `config/sweep.yaml`'s `notify.smtp_host`/`smtp_port` to Yahoo's
+   (`smtp.mail.yahoo.com`, 587) — currently still set to Gmail's values.
+3. Add `SMTP_USER`/`SMTP_PASSWORD`/`NOTIFY_RECIPIENTS` as GitHub Secrets
+   (the real family/friend list this time, not the test address).
+4. Wire `notify.py` into `sweep.py` and the workflow, the same way
+   `detect.py` already is — as its own explicit step, not bundled
+   silently into the test.
 
 ---
 
