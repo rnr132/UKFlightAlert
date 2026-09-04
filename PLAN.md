@@ -304,6 +304,37 @@ genuine drop flags and records the price; the same price under a
 different flight number does not re-flag; a genuine further drop does,
 and updates the recorded price down again.
 
+**The fix didn't survive contact with a real second run, and only
+re-verifying on real infrastructure caught it.** `filter_changed()`
+rebuilds an index row for *every* key touched by a sweep — needed so
+`observation_count`/`last_seen` stay correct whether the price changed or
+not — but that rebuild only carried forward the columns it already knew
+about. `flagged_min_price` was added to `load_index()`'s schema but never
+added to this reconstruction, so the very next time *any* sweep touched an
+already-flagged key (which is virtually guaranteed — `destination=-`
+returns most of the route universe on every call), its `flagged_min_price`
+silently reset to NaN. A manual verification run right after deploying the
+first fix reproduced exactly the bug the fix was meant to prevent: 20 of
+the 54 backfilled keys got wiped and immediately re-flagged at their tied
+price, plus the already-fixed BRE case came back too, for 21 fresh
+duplicates in one run. The unit tests passed throughout, because none of
+them simulated a key being touched by an *unrelated* ingest between being
+flagged and being re-evaluated — a real gap in test coverage, not a flaw
+in the tests that existed.
+
+**Real fix:** `flagged_min_price` added to `filter_changed()`'s merge and
+carried forward unchanged in the rebuilt row — it's detect.py's state, not
+something this function should ever modify. A regression test now
+specifically reproduces "flagged, then touched again by an unrelated
+ingest" and confirms the value survives.
+
+**Corrected the real data a second time**, more thoroughly this time:
+rebuilt the entire genuine-flag picture from scratch by replaying all 83
+accumulated flag entries (55 original + 29 from the buggy verification
+run) in chronological order — 62 genuine events across 61 distinct keys
+survived, 21 redundant entries removed, `flagged_min_price` rebuilt
+cleanly from that corrected history rather than patched incrementally.
+
 ## Delivery — email digest (scripts/notify.py, 2026-09-01)
 
 Built after Telegram was ruled out and email was chosen directly (no

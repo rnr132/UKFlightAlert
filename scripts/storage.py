@@ -216,7 +216,10 @@ def filter_changed(rows_df, index_df):
         return rows_df, index_df
 
     merged = rows_df.merge(
-        index_df[KEY_COLUMNS + ["price_hash", "observation_count", "first_seen", "last_seen"]],
+        index_df[
+            KEY_COLUMNS
+            + ["price_hash", "observation_count", "first_seen", "last_seen", "flagged_min_price"]
+        ],
         on=KEY_COLUMNS,
         how="left",
         suffixes=("", "_known"),
@@ -254,6 +257,14 @@ def filter_changed(rows_df, index_df):
         is_new_key.values, "observed_at"
     ]
     updated_rows["last_seen"] = updated_rows["observed_at"]
+    # Carry forward, don't touch — this rebuild exists for the observation
+    # bookkeeping above, and flagged_min_price is detect.py's business, not
+    # this function's. Missing this the first time around silently reset
+    # every touched key's flagged_min_price to NaN on its very next sweep,
+    # undoing the "must beat the last flag" fix the moment it needed to
+    # hold — found immediately by re-verifying on real infrastructure
+    # rather than assuming the fix worked from the unit tests alone.
+    updated_rows["flagged_min_price"] = merged["flagged_min_price"]
     updated_rows = updated_rows.drop(columns=["observed_at"])
 
     untouched = index_df[
