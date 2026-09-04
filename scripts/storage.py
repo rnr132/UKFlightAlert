@@ -56,7 +56,13 @@ ROW_COLUMNS = KEY_COLUMNS + [
     "observed_at",
     "price_hash",
 ]
-INDEX_COLUMNS = KEY_COLUMNS + ["price_hash", "observation_count", "first_seen", "last_seen"]
+INDEX_COLUMNS = KEY_COLUMNS + [
+    "price_hash",
+    "observation_count",
+    "first_seen",
+    "last_seen",
+    "flagged_min_price",
+]
 
 
 def _today_utc():
@@ -161,6 +167,7 @@ def load_index():
         empty["observation_count"] = empty["observation_count"].astype("int64")
         empty["first_seen"] = _empty_timestamp_series(empty.index)
         empty["last_seen"] = _empty_timestamp_series(empty.index)
+        empty["flagged_min_price"] = empty["flagged_min_price"].astype("float64")
         return empty
 
     index_df = pd.read_parquet(INDEX_PATH)
@@ -178,6 +185,13 @@ def load_index():
         index_df["first_seen"] = _empty_timestamp_series(index_df.index)
     if "last_seen" not in index_df.columns:
         index_df["last_seen"] = _empty_timestamp_series(index_df.index)
+    if "flagged_min_price" not in index_df.columns:
+        # NaN = never flagged. Real production data already has flags on
+        # record from before this column existed — see the one-time
+        # backfill in migrate_flagged_min_price(), run once separately,
+        # rather than reconstructed silently on every load here. A fresh
+        # index correctly starts everyone at "never flagged."
+        index_df["flagged_min_price"] = float("nan")
     return index_df
 
 

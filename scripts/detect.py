@@ -7,9 +7,13 @@ no LLM calls, matching the brief's explicit constraint from Phase 1.
 
 For every flight whose price changed *tonight*, checks whether tonight's
 price is both a genuine new low for that flight and meaningfully below
-its own recent typical price. Flags are written to
-data/flags/YYYY-MM-DD.jsonl. Nothing gets sent anywhere — this step only
-finds and records candidates; delivery is a separate, later phase.
+its own recent typical price — AND strictly better than the last price
+this exact flight was already flagged at, so a fare that merely holds at
+its own record low (e.g. a different flight number now selling the same
+price) doesn't re-flag every night it happens to be re-observed. Flags
+are written to data/flags/YYYY-MM-DD.jsonl. Nothing gets sent anywhere —
+this step only finds and records candidates; delivery is a separate,
+later phase.
 
 Why only tonight's changed rows get evaluated, not the full history every
 night: a flight whose price hasn't moved since it was last checked can't
@@ -57,9 +61,11 @@ def detect(sweep_date, config=None):
     if tonight.empty:
         return []
 
-    index_lookup = storage.load_index().set_index(storage.KEY_COLUMNS)
+    index_df = storage.load_index()
+    index_lookup = index_df.set_index(storage.KEY_COLUMNS)
 
     flags = []
+    newly_flagged = {}  # key -> price, written back into the index below
     # Grouped by depart_month so load_full_history() reads each month's
     # data once, not once per row touched tonight.
     for depart_month, group in tonight.groupby("depart_month"):
@@ -93,7 +99,18 @@ def detect(sweep_date, config=None):
             is_new_low = tonight_price <= baseline_min
             is_meaningfully_below = tonight_price <= baseline_median * (1 - drop_pct_threshold)
 
-            if is_new_low and is_meaningfully_below:
+            # Must beat this exact flight's own last flagged price, not
+            # merely tie it — otherwise a fare that just holds at its
+            # record low (e.g. a different flight number now selling the
+            # same price, which still counts as "changed" for storage
+            # purposes) re-flags every night it's re-observed. NaN means
+            # never flagged before, so anything eligible clears this.
+            flagged_min_price = index_lookup.loc[key, "flagged_min_price"]
+            if isinstance(flagged_min_price, pd.Series):
+                flagged_min_price = flagged_min_price.iloc[0]
+            already_flagged_this_low = pd.notna(flagged_min_price) and tonight_price >= flagged_min_price
+
+            if is_new_low and is_meaningfully_below and not already_flagged_this_low:
                 flags.append(
                     {
                         "flagged_at": sweep_date.isoformat(),
@@ -109,8 +126,32 @@ def detect(sweep_date, config=None):
                         "observation_count": int(obs_count),
                     }
                 )
+                newly_flagged[key] = tonight_price
+
+    if newly_flagged:
+        _record_flagged_prices(index_df, newly_flagged)
+        storage.save_index(index_df)
 
     return flags
+
+
+def _record_flagged_prices(index_df, newly_flagged):
+    """Mutate index_df in place: stamp flagged_min_price for every key
+    that just flagged, so a future night only re-flags this exact flight
+    if it beats that price. A boolean mask per key rather than a MultiIndex
+    .loc assignment — simpler and avoids another dtype-alignment surprise
+    on top of the tz one already found the hard way in storage.py.
+
+    Note: relies on exact equality across KEY_COLUMNS, including
+    return_date — fine while trip_type is round-trip only (PLAN.md §3),
+    since NaN/NaT never equals itself and would silently fail to match if
+    one-way (null return_date) keys ever entered the mix.
+    """
+    for key, price in newly_flagged.items():
+        mask = pd.Series(True, index=index_df.index)
+        for col, value in zip(storage.KEY_COLUMNS, key):
+            mask &= index_df[col] == value
+        index_df.loc[mask, "flagged_min_price"] = price
 
 
 def write_flags(flags, sweep_date):

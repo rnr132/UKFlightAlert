@@ -271,6 +271,39 @@ a night early, which is the actual failure this whole fix exists to
 prevent. 1,808 LHR keys were touched by the correction; 899 of them had
 already reached `observation_count: 5` and are now correctly back at 4.
 
+## detect.py: don't re-flag a route that only ties its own last flag (2026-09-05)
+
+Found by checking observation counts, not by a report of anything broken:
+`LCY→BRE` flagged on both 2026-09-03 and 2026-09-04 at the identical
+£239 — because `_price_hash()` includes flight number and airline, a
+*different* flight now selling the same fare still counts as "changed"
+and gets re-evaluated, and the flag condition was "price ≤ historical
+min," which a tied price satisfies. Harmless for storage (a genuinely
+different flight is worth recording), wrong for detection — the same
+route would have shown up twice in one weekly digest looking like a
+copy-paste error.
+
+**Fix:** the index gained a `flagged_min_price` column, stamped with the
+price whenever a route flags. A route only re-flags if it beats that
+price — strictly, not ties it. `storage.load_index()`'s migration path
+backfills `NaN` (never flagged) for any index written before this column
+existed, consistent with how `observation_count`'s own migration works.
+
+**Corrected the real historical record, not just the code, since nothing
+had been emailed yet:** replayed all 55 real flags in chronological order
+against the corrected rule. 54 would still have fired; the Sept-4 BRE
+repeat wouldn't have, so it was removed from `data/flags/2026-09-04.jsonl`
+and `flagged_min_price` was backfilled for all 54 genuine keys from their
+real flag history — not just reset to NaN and left to re-derive slowly,
+which would have let BRE (and anything else already flagged at its true
+best price) re-flag once more on the next unrelated flight-number change
+before the fix could take effect.
+
+Verified against the exact reproduction before touching real data: first
+genuine drop flags and records the price; the same price under a
+different flight number does not re-flag; a genuine further drop does,
+and updates the recorded price down again.
+
 ## Delivery — email digest (scripts/notify.py, 2026-09-01)
 
 Built after Telegram was ruled out and email was chosen directly (no
