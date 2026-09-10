@@ -367,6 +367,20 @@ user chooses (most likely their own) for format review — the same
 "verify against one origin before the full set" principle applied to
 delivery — before this touches the real recipient list or the nightly
 workflow.
+
+**Reworked 2026-09-10, after the first real week put 140 fares in the
+digest at the 15% bar.** `drop_pct_threshold` raised to 0.20 (detect.py
+picks it up for future flagging; `build_digest()` also filters to the
+same bar, so it reshaped the existing record straight away — 140 → ~80 in
+the 7-day window). The digest now groups by the destination's continent,
+sorts by drop size (largest first) within and across groups, and leads
+each entry with the place in English — `scripts/places.py` resolves an
+IATA code to `City, Country` via `airportsdata` + `pycountry_convert`,
+both bundled offline data so the no-network rule still holds; three metro
+codes (`BUH`, `TCI`, `BAK`) need a manual override, unknowns fall through
+to the raw code under "Other" rather than crashing. Still likely needs a
+hard entry cap or per-recipient region filtering before it goes live —
+noted, not built.
 - **Retention-boundary interaction, unresolved by design.** A far-tier
   flight swept for close to its full ~19-month life could have early
   history rolled into a weekly summary (`data/rollups/`) before it's ever
