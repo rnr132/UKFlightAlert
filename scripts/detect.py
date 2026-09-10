@@ -52,6 +52,7 @@ def detect(sweep_date, config=None):
     config = config or load_config()
     min_observations = config["detection"]["min_observations"]
     drop_pct_threshold = config["detection"]["drop_pct_threshold"]
+    min_trip_nights = config["detection"].get("min_trip_nights", 0)
 
     delta_path = storage.DELTA_DIR / f"{sweep_date.isoformat()}.parquet"
     if not delta_path.exists():
@@ -83,6 +84,14 @@ def detect(sweep_date, config=None):
             if isinstance(obs_count, pd.Series):
                 obs_count = obs_count.iloc[0]
             if obs_count < min_observations:
+                continue
+
+            # Skip trips shorter than min_trip_nights — a same-day or
+            # next-day round trip isn't a leisure fare worth surfacing,
+            # it's usually a data quirk or a positioning fare. return_date
+            # is always present while trip_type is round-trip only.
+            trip_nights = (row["return_date"] - row["depart_date"]).days
+            if trip_nights < min_trip_nights:
                 continue
 
             if key not in history.index:

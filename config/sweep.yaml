@@ -101,6 +101,11 @@ detection:
   # the change takes effect on the existing record immediately, not just
   # on new flags.
   drop_pct_threshold: 0.20
+  # Minimum trip length in nights (return_date - depart_date). Same-day
+  # and next-day round trips aren't leisure fares — usually a data quirk
+  # or a positioning fare — so they don't get flagged. notify.py filters
+  # the digest to the same rule, so it reshapes the existing record too.
+  min_trip_nights: 2
 
 monitoring:
   # If the newest heartbeat is older than this when a run starts, print a

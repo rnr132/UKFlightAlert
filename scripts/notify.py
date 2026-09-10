@@ -24,7 +24,7 @@ import json
 import os
 import smtplib
 from collections import defaultdict
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from email.mime.text import MIMEText
 
 import detect
@@ -49,17 +49,25 @@ def _load_recent_flags(as_of, days=7):
     return flags
 
 
-def build_digest(flags, as_of, min_drop_pct):
+def _trip_nights(flag):
+    return (date.fromisoformat(flag["return_date"]) - date.fromisoformat(flag["depart_date"])).days
+
+
+def build_digest(flags, as_of, min_drop_pct, min_trip_nights=0):
     """Plain-text digest body, or None if there's nothing to say. Pure
     templating — no LLM involved, matching the brief's constraint.
 
-    Only fares that dropped at least `min_drop_pct` are shown, so raising
-    the config threshold reshapes the existing record immediately, not
-    just future flags. Grouped by the destination's continent, biggest
-    drop first within each group, and the groups themselves ordered by
-    their single biggest drop.
+    Filtered to fares that dropped at least `min_drop_pct` and stay at
+    least `min_trip_nights` nights, so tightening either config value
+    reshapes the existing record immediately, not just future flags.
+    Grouped by the destination's continent, biggest drop first within
+    each group, groups themselves ordered by their single biggest drop.
     """
-    eligible = [f for f in flags if f["drop_pct_vs_median"] >= min_drop_pct]
+    eligible = [
+        f
+        for f in flags
+        if f["drop_pct_vs_median"] >= min_drop_pct and _trip_nights(f) >= min_trip_nights
+    ]
     if not eligible:
         return None
 
@@ -151,7 +159,12 @@ def run(config=None, as_of=None, force=False, dry_run=False, test_address=None):
         return {"sent": False, "reason": "not_digest_day"}
 
     flags = _load_recent_flags(as_of)
-    body = build_digest(flags, as_of, config["detection"]["drop_pct_threshold"])
+    body = build_digest(
+        flags,
+        as_of,
+        config["detection"]["drop_pct_threshold"],
+        config["detection"].get("min_trip_nights", 0),
+    )
 
     if body is None:
         print("notify: nothing over the drop threshold in the last 7 days — nothing to send")
