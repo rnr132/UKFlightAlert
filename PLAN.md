@@ -381,9 +381,11 @@ codes (`BUH`, `TCI`, `BAK`) need a manual override, unknowns fall through
 to the raw code under "Other" rather than crashing. Then `min_trip_nights` (2) added on 2026-09-10 as well — same-day and
 next-day round trips aren't leisure fares, so `detect.py` skips them and
 `build_digest()` filters them out of the existing record (11 flags,
-including what had been the 62% Geneva headline, a 1-night trip). Still
-likely needs a hard entry cap or per-recipient region filtering before it
-goes live — noted, not built.
+including what had been the 62% Geneva headline, a 1-night trip). Then grouped region -> destination (2026-09-10): every flagged fare to
+one place sits under a single heading, repeat flags of the same itinerary
+collapsed to the latest/lowest, dates shown as `1-Oct-26`, trip length in
+place of the redundant `round_trip` label. Still likely needs a hard entry
+cap or per-recipient region filtering before it goes live — noted, not built.
 - **Retention-boundary interaction, unresolved by design.** A far-tier
   flight swept for close to its full ~19-month life could have early
   history rolled into a weekly summary (`data/rollups/`) before it's ever
