@@ -95,8 +95,12 @@ detection:
   # Flag only when tonight's price is a genuine new low AND at least this
   # fraction below its own recent median. Either condition alone is too
   # weak on its own — see PLAN.md's Phase 2 section for why both are
-  # required together.
-  drop_pct_threshold: 0.15
+  # required together. Raised 0.15 -> 0.20 on 2026-09-10: at 15% the first
+  # real week produced 140 flagged fares, far more than a weekly digest
+  # should carry. notify.py also filters the digest to this same bar, so
+  # the change takes effect on the existing record immediately, not just
+  # on new flags.
+  drop_pct_threshold: 0.20
 
 monitoring:
   # If the newest heartbeat is older than this when a run starts, print a

@@ -23,10 +23,12 @@ import argparse
 import json
 import os
 import smtplib
+from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from email.mime.text import MIMEText
 
 import detect
+import places
 from config import load_config
 
 
@@ -47,29 +49,57 @@ def _load_recent_flags(as_of, days=7):
     return flags
 
 
-def build_digest(flags, as_of):
+def build_digest(flags, as_of, min_drop_pct):
     """Plain-text digest body, or None if there's nothing to say. Pure
-    templating — no LLM involved, matching the brief's constraint."""
-    if not flags:
+    templating — no LLM involved, matching the brief's constraint.
+
+    Only fares that dropped at least `min_drop_pct` are shown, so raising
+    the config threshold reshapes the existing record immediately, not
+    just future flags. Grouped by the destination's continent, biggest
+    drop first within each group, and the groups themselves ordered by
+    their single biggest drop.
+    """
+    eligible = [f for f in flags if f["drop_pct_vs_median"] >= min_drop_pct]
+    if not eligible:
         return None
 
+    groups = defaultdict(list)
+    for f in eligible:
+        city, country, continent = places.resolve(f["destination"])
+        groups[continent].append({**f, "_city": city, "_country": country})
+
+    for g in groups.values():
+        g.sort(key=lambda x: x["drop_pct_vs_median"], reverse=True)
+    ordered = sorted(
+        groups, key=lambda c: groups[c][0]["drop_pct_vs_median"], reverse=True
+    )
+
+    pct_bar = round(min_drop_pct * 100)
     lines = [
         f"Flight Deal Scanner — weekly digest ({as_of.isoformat()})",
         "",
-        f"{len(flags)} flight(s) flagged this week:",
+        f"{len(eligible)} fare(s) at least {pct_bar}% below their recent typical price,",
+        "grouped by region, biggest drop first.",
         "",
     ]
-    for flag in flags:
-        lines.append(
-            f"  {flag['origin_airport']} -> {flag['destination']}: "
-            f"GBP {flag['price_gbp']:.0f} (typically GBP {flag['prior_median_gbp']:.0f}, "
-            f"{flag['drop_pct_vs_median'] * 100:.0f}% below)"
-        )
-        lines.append(
-            f"    depart {flag['depart_date']}, return {flag['return_date']}, "
-            f"{flag['trip_type']}, flagged {flag['flagged_at']} "
-            f"({flag['observation_count']} nights observed before this)"
-        )
+    for continent in ordered:
+        lines.append(continent.upper())
+        lines.append("-" * len(continent))
+        for f in groups[continent]:
+            pct = round(f["drop_pct_vs_median"] * 100)
+            place = ", ".join(p for p in (f["_city"], f["_country"]) if p)
+            lines.append(f"  {place} ({f['destination']})")
+            lines.append(
+                f"    {f['origin_airport']} -> {f['destination']}  "
+                f"GBP {f['price_gbp']:.0f}  "
+                f"(typically GBP {f['prior_median_gbp']:.0f}, {pct}% below)"
+            )
+            lines.append(
+                f"    depart {f['depart_date']}, return {f['return_date']}, "
+                f"{f['trip_type']}, flagged {f['flagged_at']} "
+                f"({f['observation_count']} nights watched)"
+            )
+            lines.append("")
         lines.append("")
 
     lines.append(
@@ -121,10 +151,10 @@ def run(config=None, as_of=None, force=False, dry_run=False, test_address=None):
         return {"sent": False, "reason": "not_digest_day"}
 
     flags = _load_recent_flags(as_of)
-    body = build_digest(flags, as_of)
+    body = build_digest(flags, as_of, config["detection"]["drop_pct_threshold"])
 
     if body is None:
-        print("notify: no flags in the last 7 days — quiet week, nothing to send")
+        print("notify: nothing over the drop threshold in the last 7 days — nothing to send")
         return {"sent": False, "reason": "no_flags", "flags_count": 0}
 
     if dry_run:
