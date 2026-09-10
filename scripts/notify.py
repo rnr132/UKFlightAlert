@@ -53,6 +53,13 @@ def _trip_nights(flag):
     return (date.fromisoformat(flag["return_date"]) - date.fromisoformat(flag["depart_date"])).days
 
 
+def _fmt_date(iso_str):
+    """2026-10-01 -> 1-Oct-26. Built by hand rather than strftime('%-d')
+    since the no-leading-zero directive isn't portable across platforms."""
+    d = date.fromisoformat(iso_str)
+    return f"{d.day}-{d.strftime('%b')}-{d.strftime('%y')}"
+
+
 def build_digest(flags, as_of, min_drop_pct, min_trip_nights=0):
     """Plain-text digest body, or None if there's nothing to say. Pure
     templating — no LLM involved, matching the brief's constraint.
@@ -84,7 +91,7 @@ def build_digest(flags, as_of, min_drop_pct, min_trip_nights=0):
 
     pct_bar = round(min_drop_pct * 100)
     lines = [
-        f"Flight Deal Scanner — weekly digest ({as_of.isoformat()})",
+        f"Flight Deal Scanner — weekly digest ({_fmt_date(as_of.isoformat())})",
         "",
         f"{len(eligible)} fare(s) at least {pct_bar}% below their recent typical price,",
         "grouped by region, biggest drop first.",
@@ -102,10 +109,11 @@ def build_digest(flags, as_of, min_drop_pct, min_trip_nights=0):
                 f"GBP {f['price_gbp']:.0f}  "
                 f"(typically GBP {f['prior_median_gbp']:.0f}, {pct}% below)"
             )
+            nights = _trip_nights(f)
             lines.append(
-                f"    depart {f['depart_date']}, return {f['return_date']}, "
-                f"{f['trip_type']}, flagged {f['flagged_at']} "
-                f"({f['observation_count']} nights watched)"
+                f"    {_fmt_date(f['depart_date'])} to {_fmt_date(f['return_date'])}  "
+                f"({nights} night{'s' if nights != 1 else ''})  "
+                f"flagged {_fmt_date(f['flagged_at'])}"
             )
             lines.append("")
         lines.append("")
