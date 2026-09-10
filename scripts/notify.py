@@ -67,8 +67,14 @@ def build_digest(flags, as_of, min_drop_pct, min_trip_nights=0):
     Filtered to fares that dropped at least `min_drop_pct` and stay at
     least `min_trip_nights` nights, so tightening either config value
     reshapes the existing record immediately, not just future flags.
-    Grouped by the destination's continent, biggest drop first within
-    each group, groups themselves ordered by their single biggest drop.
+
+    Grouped region -> destination: every flagged fare to the same place
+    sits together under one heading, even if the discounts differ. Within
+    a destination, biggest drop first; destinations ordered by their best
+    drop; regions likewise. Where the same itinerary (same origin, same
+    dates) was flagged more than once in the window as it kept dropping,
+    only the latest — which by the re-flag rule is also the lowest — is
+    shown.
     """
     eligible = [
         f
@@ -78,43 +84,63 @@ def build_digest(flags, as_of, min_drop_pct, min_trip_nights=0):
     if not eligible:
         return None
 
-    groups = defaultdict(list)
+    # Collapse repeat flags of the same itinerary to the latest one.
+    latest = {}
     for f in eligible:
-        city, country, continent = places.resolve(f["destination"])
-        groups[continent].append({**f, "_city": city, "_country": country})
+        k = (f["origin_airport"], f["destination"], f["depart_date"], f["return_date"])
+        if k not in latest or f["flagged_at"] > latest[k]["flagged_at"]:
+            latest[k] = f
 
-    for g in groups.values():
-        g.sort(key=lambda x: x["drop_pct_vs_median"], reverse=True)
-    ordered = sorted(
-        groups, key=lambda c: groups[c][0]["drop_pct_vs_median"], reverse=True
-    )
+    # region -> destination code -> [fares]
+    tree = defaultdict(lambda: defaultdict(list))
+    for f in latest.values():
+        city, country, continent = places.resolve(f["destination"])
+        tree[continent][f["destination"]].append(
+            {**f, "_city": city, "_country": country}
+        )
+
+    def best(fares):
+        return max(x["drop_pct_vs_median"] for x in fares)
 
     pct_bar = round(min_drop_pct * 100)
     lines = [
         f"Flight Deal Scanner — weekly digest ({_fmt_date(as_of.isoformat())})",
         "",
-        f"{len(eligible)} fare(s) at least {pct_bar}% below their recent typical price,",
-        "grouped by region, biggest drop first.",
+        f"{len(latest)} fare(s) at least {pct_bar}% below their recent typical price,",
+        "grouped by region then destination, biggest drop first.",
         "",
     ]
-    for continent in ordered:
+    continents = sorted(
+        tree, key=lambda c: max(best(v) for v in tree[c].values()), reverse=True
+    )
+    for continent in continents:
         lines.append(continent.upper())
         lines.append("-" * len(continent))
-        for f in groups[continent]:
-            pct = round(f["drop_pct_vs_median"] * 100)
-            place = ", ".join(p for p in (f["_city"], f["_country"]) if p)
-            lines.append(f"  {place} ({f['destination']})")
-            lines.append(
-                f"    {f['origin_airport']} -> {f['destination']}  "
-                f"GBP {f['price_gbp']:.0f}  "
-                f"(typically GBP {f['prior_median_gbp']:.0f}, {pct}% below)"
+        dests = sorted(
+            tree[continent], key=lambda d: best(tree[continent][d]), reverse=True
+        )
+        for dcode in dests:
+            fares = sorted(
+                tree[continent][dcode],
+                key=lambda x: x["drop_pct_vs_median"],
+                reverse=True,
             )
-            nights = _trip_nights(f)
-            lines.append(
-                f"    {_fmt_date(f['depart_date'])} to {_fmt_date(f['return_date'])}  "
-                f"({nights} night{'s' if nights != 1 else ''})  "
-                f"flagged {_fmt_date(f['flagged_at'])}"
-            )
+            head = fares[0]
+            place = ", ".join(p for p in (head["_city"], head["_country"]) if p)
+            lines.append(f"  {place} ({dcode})")
+            for f in fares:
+                pct = round(f["drop_pct_vs_median"] * 100)
+                nights = _trip_nights(f)
+                lines.append(
+                    f"    {f['origin_airport']} -> {dcode}  "
+                    f"GBP {f['price_gbp']:.0f}  "
+                    f"(typically GBP {f['prior_median_gbp']:.0f}, {pct}% below)"
+                )
+                lines.append(
+                    f"      {_fmt_date(f['depart_date'])} to {_fmt_date(f['return_date'])}  "
+                    f"({nights} night{'s' if nights != 1 else ''})  "
+                    f"flagged {_fmt_date(f['flagged_at'])}"
+                )
             lines.append("")
         lines.append("")
 
