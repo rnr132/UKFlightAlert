@@ -15,6 +15,7 @@ _AIRPORTS = airportsdata.load("IATA")
 _OVERRIDES = {
     "BUH": ("Bucharest", "Romania", "Europe"),
     "TCI": ("Tenerife", "Spain", "Europe"),
+    "BAK": ("Baku", "Azerbaijan", "Asia"),
 }
 
 _CONTINENT_NAMES = {
