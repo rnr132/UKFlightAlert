@@ -156,6 +156,19 @@ cheap. Full reasoning in [PLAN.md §4](PLAN.md).
 - `workflow_dispatch` is always available on the workflow's Actions page
   for replaying a missed night by hand, independent of the schedule.
 
+## Keeping the workflows current
+
+Every `uses:` in `.github/workflows/` is pinned to a full commit SHA, not
+a moving tag — a compromised upstream tag then can't roll into a run on
+its own ([PLAN.md §4.2](PLAN.md)). The trade-off is that updates have to
+be pulled in by hand. `check-action-pins.yml` runs `check_action_pins.py`
+once a quarter (and on demand): if any pinned action is behind its latest
+release it opens a single `action-pins` issue with the exact old → new
+SHA to write. An all-current run does nothing. When the issue appears,
+re-resolve the SHAs independently (the issue body carries the
+`git ls-remote` command), skim the release notes, bump the pins, close
+the issue.
+
 ## Repo structure
 
 ```
@@ -167,11 +180,15 @@ PLAN.md                      architecture, every decision and why, what changed
                              after comparing assumptions against live data
 config/sweep.yaml            origins, horizon, endpoint, retention — no secrets
 scripts/
-  config.py   shared config/path loading
-  sweep.py    fetch, throttle, retry, ingest, heartbeat
-  storage.py  normalize, delta write, compaction, rollup
-  detect.py   deal detection — flags a genuine new low vs. own history
-  notify.py   weekly email digest — built, not yet wired in (see above)
-.github/workflows/sweep.yml  the nightly Action
+  config.py             shared config/path loading
+  sweep.py              fetch, throttle, retry, ingest, heartbeat
+  storage.py            normalize, delta write, compaction, rollup
+  detect.py             deal detection — flags a genuine new low vs. own history
+  notify.py             weekly email digest — built, not yet wired in (see above)
+  check_action_pins.py  quarterly: is any SHA-pinned action behind its latest
+                        release? opens a tracking issue if so (stdlib only)
+.github/workflows/
+  sweep.yml             the nightly Action
+  check-action-pins.yml runs check_action_pins.py quarterly + on demand
 data/                        the accumulating price history (see above)
 ```

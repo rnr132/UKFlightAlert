@@ -83,18 +83,31 @@ retention pipeline all run independently of delivery being resolved.
 
 ---
 
-## Re-pin GitHub Actions to newer SHAs
+## Re-pin GitHub Actions to newer SHAs — now automated
 
-`actions/checkout` and `actions/setup-python` are pinned to specific commit
-SHAs in `.github/workflows/sweep.yml` (deliberately, per `PLAN.md §4.2`'s
-fix). The first real run on 2026-08-28 printed a deprecation notice:
+**Done once by hand on 2026-09-10:** `actions/checkout` v4.4.0 → v7.0.1,
+`actions/setup-python` v5.6.0 → v7.0.0, in both workflow files. Both new
+majors (checkout v5, setup-python v6) target Node 24 natively, so the
+"Node.js 20 is deprecated … forced to run on Node.js 24" notice that had
+printed on every run since 2026-08-28 is gone. Release notes for the
+major jumps were checked first — the only breaking changes
+(`pull_request_target` fork-checkout defaults, persist-credentials
+location, Node 24 minimum runner) don't touch a `schedule` +
+`workflow_dispatch`, checkout-then-commit workflow on GitHub-hosted
+runners.
 
-> Node.js 20 is deprecated. The following actions target Node.js 20 but are
-> being forced to run on Node.js 24: `actions/checkout@11d5960a...`,
-> `actions/setup-python@a26af69be...`
+**Standing check, so this doesn't need remembering again:**
+`scripts/check_action_pins.py`, run quarterly by
+`.github/workflows/check-action-pins.yml` (09:27 UTC, 1st of
+Jan/Apr/Jul/Oct) and on demand via `workflow_dispatch`. It reads every
+SHA-pinned `uses:` out of the workflow files, asks the GitHub API for
+each action's latest release, and opens (or refreshes) a single
+`action-pins`-labelled issue — *Re-pin GitHub Actions to newer SHAs* —
+carrying the exact old → new SHA and `# vX.Y.Z` comment to write.
+Everything-current is a clean no-op run, no issue. Change `*/3` to `*/4`
+in the cron for a four-monthly cadence instead of quarterly.
 
-Not currently a failure — GitHub is transparently forcing both onto Node 24
-— but worth bumping both pins to their newest releases sometime in the next
-few months before that stops being true. Re-resolve the SHAs the same way
-they were found originally (`git ls-remote --tags` against each repo) rather
-than trusting a cached value here.
+When the issue shows up: re-resolve each SHA independently first (the
+issue body includes the `git ls-remote --tags` line), skim that
+release's notes for anything that touches this kind of workflow, bump
+the pins, close the issue.

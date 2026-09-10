@@ -1,0 +1,33 @@
+name: Check action pins
+
+"on":
+  schedule:
+    # 09:27 UTC on the 1st of Jan / Apr / Jul / Oct — once a quarter.
+    # Off-the-hour for the same reason as the sweep (PATTERNS.md: GitHub's
+    # scheduler is most congested at :00). `*/3` on the month field is
+    # every third month; change it to `*/4` for a four-monthly cadence.
+    - cron: "27 9 1 */3 *"
+  workflow_dispatch: {}
+  # Manual trigger so the check can be run on demand — e.g. right after
+  # bumping a pin, to confirm nothing else is now behind.
+
+permissions:
+  contents: read   # only reads the workflow files
+  issues: write    # opens / refreshes the one tracking issue
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Check action pins
+        # No setup-python step: check_action_pins.py is stdlib-only by
+        # design, and ubuntu-latest ships a current python3. That keeps
+        # this maintenance workflow down to a single pinned action to
+        # keep fresh — the one it's checking on everything else's behalf.
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/check_action_pins.py
