@@ -109,6 +109,14 @@ detection:
   # and next-day round trips aren't leisure fares — usually a data quirk
   # or a positioning fare — so they don't get flagged. notify.py filters
   # the digest to the same rule, so it reshapes the existing record too.
+  #
+  # One named exception, added 2026-09-17: a literal Saturday-to-Sunday
+  # 1-night trip clears this floor even though it's below it — a real
+  # weekend getaway, not the "probably a data quirk" case the floor
+  # exists to catch. See detect.is_eligible_trip_length(), the one place
+  # this rule (floor + exception) actually lives — detect.py and
+  # notify.py both call it, so this value only sets the floor; the
+  # exception itself isn't config-driven.
   min_trip_nights: 2
 
 monitoring:

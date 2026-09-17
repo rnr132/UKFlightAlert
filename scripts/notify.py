@@ -65,6 +65,17 @@ def _trip_nights(flag):
     return (date.fromisoformat(flag["return_date"]) - date.fromisoformat(flag["depart_date"])).days
 
 
+def _flag_trip_eligible(flag, min_trip_nights):
+    """detect.is_eligible_trip_length() wants real date objects; a flag's
+    dates are ISO strings (they came off a JSON line), converted here so
+    this file reuses detect.py's one rule (nights floor + the Sat-Sun
+    exception) rather than re-deriving a second copy of it that could
+    drift out of sync."""
+    depart = date.fromisoformat(flag["depart_date"])
+    ret = date.fromisoformat(flag["return_date"])
+    return detect.is_eligible_trip_length(depart, ret, min_trip_nights)
+
+
 def _fmt_date(iso_str):
     """2026-10-01 -> 1-Oct-26. Built by hand rather than strftime('%-d')
     since the no-leading-zero directive isn't portable across platforms."""
@@ -86,10 +97,11 @@ def _date_range_label(depart_iso, return_iso):
 
 
 def _prepare_digest(flags, min_drop_pct, min_trip_nights=0):
-    """Filter to fares that dropped at least `min_drop_pct` and stay at
-    least `min_trip_nights` nights, collapse repeat flags of the same
-    itinerary to the latest (which by the re-flag rule in detect.py is
-    also the lowest), then group region -> destination -> [fares].
+    """Filter to fares that dropped at least `min_drop_pct` and clear the
+    trip-length floor (detect.is_eligible_trip_length() — the nights
+    floor, plus a Sat-Sun 1-night exception), collapse repeat flags of the
+    same itinerary to the latest (which by the re-flag rule in detect.py
+    is also the lowest), then group region -> destination -> [fares].
 
     Returns (tree, count) where count is the number of *unique itineraries
     actually shown* — not len(flags). Those differ in two real ways: a
@@ -107,7 +119,7 @@ def _prepare_digest(flags, min_drop_pct, min_trip_nights=0):
     eligible = [
         f
         for f in flags
-        if f["drop_pct_vs_median"] >= min_drop_pct and _trip_nights(f) >= min_trip_nights
+        if f["drop_pct_vs_median"] >= min_drop_pct and _flag_trip_eligible(f, min_trip_nights)
     ]
     if not eligible:
         return None, 0

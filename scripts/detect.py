@@ -46,6 +46,34 @@ def _as_date_str(value):
     return str(value.date()) if hasattr(value, "date") else str(value)
 
 
+def is_eligible_trip_length(depart_date, return_date, min_trip_nights):
+    """Trip-length gate, shared with notify.py's digest filter so the two
+    can never disagree about which fares qualify (same principle as
+    notify.py's own _prepare_digest()).
+
+    A plain nights floor, with one named exception (2026-09-17): a literal
+    Saturday-to-Sunday 1-night trip is let through even below the floor.
+    Everything else under the floor stays excluded, min_trip_nights==2's
+    original reasoning unchanged — a random 1-night round trip is usually
+    a data quirk or a positioning fare, not a leisure booking. A real
+    weekend getaway is the one 1-night shape that's genuinely a leisure
+    trip, so it gets a narrow, specific carve-out rather than lowering the
+    floor for every 1-night trip.
+
+    Takes real date-like objects (anything with .weekday() — a
+    datetime.date, a datetime.datetime, or a pandas Timestamp all work);
+    callers convert from whatever their own source representation is."""
+    nights = (return_date - depart_date).days
+    if nights >= min_trip_nights:
+        return True
+    # Mon=0 ... Sat=5, Sun=6. Checking both days (not just "depart is
+    # Saturday") is redundant when nights==1 -- a 1-night trip departing
+    # Saturday can only return Sunday -- but it keeps the actual intent
+    # ("Saturday to Sunday", not just "starts on a Saturday") explicit
+    # here rather than relying on that arithmetic fact staying true.
+    return nights == 1 and depart_date.weekday() == 5 and return_date.weekday() == 6
+
+
 def detect(sweep_date, config=None):
     """Return a list of flagged-deal dicts for the given sweep date.
     Read-only — see write_flags() for persisting the result."""
@@ -86,12 +114,10 @@ def detect(sweep_date, config=None):
             if obs_count < min_observations:
                 continue
 
-            # Skip trips shorter than min_trip_nights — a same-day or
-            # next-day round trip isn't a leisure fare worth surfacing,
-            # it's usually a data quirk or a positioning fare. return_date
-            # is always present while trip_type is round-trip only.
-            trip_nights = (row["return_date"] - row["depart_date"]).days
-            if trip_nights < min_trip_nights:
+            # Skip trips shorter than min_trip_nights, with a Sat-Sun
+            # exception — see is_eligible_trip_length(). return_date is
+            # always present while trip_type is round-trip only.
+            if not is_eligible_trip_length(row["depart_date"], row["return_date"], min_trip_nights):
                 continue
 
             if key not in history.index:

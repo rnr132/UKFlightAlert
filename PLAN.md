@@ -701,3 +701,52 @@ text and HTML, including alongside a holiday tag on the same fare card).
 `TODO.md` along with what's already known from the abandoned
 `grouped_prices` endpoint's `link` field, so that doesn't need
 rediscovering later.
+
+## min_trip_nights: a Saturday-to-Sunday exception (2026-09-17)
+
+Prompted by the min_trip_nights=1 exploration earlier the same day, which
+surfaced a real example (`LGW -> MAN`, Gatwick to Manchester — flagged as
+likely noise at the time) alongside two plausible genuine 1-night trips.
+Rather than lowering the floor for every 1-night trip, the ask was
+narrower and more specific: let a real weekend getaway through, nothing
+else under 2 nights.
+
+`detect.is_eligible_trip_length(depart_date, return_date,
+min_trip_nights)` is the one place this rule lives — the floor, plus a
+named exception for a *literal* Saturday-to-Sunday 1-night trip, nothing
+looser (not Friday-to-Sunday, not "starts on a weekend"). Both
+`detect.py`'s flagging gate and `notify.py`'s digest-render filter
+(`_flag_trip_eligible()`, converting a flag's ISO date strings before
+delegating to the same function) call it, so the two can't independently
+drift on what counts — same principle as `_prepare_digest()` and every
+other shared-rule helper in this file.
+
+**Real data answered its own open question:** all three fares the
+min_trip_nights=1 exploration found turned out to be genuine
+Saturday-to-Sunday trips, including the one flagged as probable noise
+(`LGW -> MAN`). Under the literal rule as specified, a domestic weekend
+break is exactly as eligible as an international one — a real
+consequence, not a loophole, and worth knowing rather than silently
+narrowing further on an assumption the user didn't ask for.
+
+**Verified, and the limit of what verifying accomplished today, both
+worth recording:** `is_eligible_trip_length()` checked directly against
+five hand-built cases (Sat->Sun true; Sun->Mon, Fri->Sat, and same-day
+all false; an ordinary 2-night midweek trip true) — confirms the rule is
+exactly as narrow as specified, not "any weekend-adjacent" shape. Then
+the same read-only simulation technique used earlier the same day
+(`detect()`
+re-run per real sweep date, `storage.save_index` patched to a no-op so
+nothing touches disk) against real data. But: none of the three real
+examples appear in tonight's actual digest, and grep against
+`data/flags/*.jsonl` explains why precisely rather than leaving it a
+mystery — `LGW -> MAN` has never been flagged at all (this rule is the
+first time it could be), while the `TRN`/`TOS` instances *were* flagged
+once, on 2026-09-05 to 09-09, before `min_trip_nights` existed as a rule
+at all (added 2026-09-10) — both now outside the 7-day digest window
+regardless. `detect()` only ever re-evaluates rows whose price changed on
+a given delta night, by design (the whole point of delta-based storage);
+it doesn't retroactively re-score prices that haven't moved. So this fix
+is real and correct, but it's forward-looking only — none of today's
+three examples will reappear in a real digest unless their price changes
+again in a future sweep.
