@@ -95,14 +95,16 @@ detection:
   # Flag only when tonight's price is a genuine new low AND at least this
   # fraction below its own recent median. Either condition alone is too
   # weak on its own — see PLAN.md's Phase 2 section for why both are
-  # required together. Raised 0.15 -> 0.20 on 2026-09-10 (140 -> ~80
-  # flags/week), then 0.20 -> 0.25 on 2026-09-17 after the redesigned
-  # HTML digest was still carrying 43 unique itineraries at 20% — real
-  # 7-day window at the time: 47 flags / 43 unique at 20%, 29 unique at
-  # 25%. notify.py's digest builder filters to this same bar at render
-  # time (not the stored data/flags/*.jsonl files), so the change takes
-  # effect on the existing record immediately, not just on new flags.
-  drop_pct_threshold: 0.25
+  # required together. 0.15 -> 0.20 on 2026-09-10 (140 -> ~80 flags/week);
+  # 0.20 -> 0.25 on 2026-09-17 (47/43 unique -> 31/29 unique); 0.25 -> 0.30
+  # same day, request direct rather than a volume complaint this time —
+  # real 7-day window at the time: 16 flags / 16 unique at 30% (all
+  # already-unique; nothing left to collapse at this bar). Also checked
+  # and recorded then: 11/11 at 35%, in case 30% still isn't the number.
+  # notify.py's digest builder filters to this same bar at render time
+  # (not the stored data/flags/*.jsonl files), so the change takes effect
+  # on the existing record immediately, not just on new flags.
+  drop_pct_threshold: 0.30
   # Minimum trip length in nights (return_date - depart_date). Same-day
   # and next-day round trips aren't leisure fares — usually a data quirk
   # or a positioning fare — so they don't get flagged. notify.py filters
@@ -141,9 +143,17 @@ notify:
   # Must be an address on a domain verified in the Resend dashboard.
   # Not a secret either — it's the visible sender on every email sent —
   # so unlike the old Gmail-era sender it can live here in plain config.
-  # This is a placeholder until the real domain/subdomain is verified;
-  # update it then (TODO.md has the steps).
-  from_address: "deals@flightalert.rohit-nair.com"
+  # Domain verified 2026-09-17 (see PLAN.md); local part chosen to match
+  # the "London Flight Deals" brand below, same day.
+  from_address: "londondeals@flightalert.rohit-nair.com"
+  # The display name recipients see in their inbox ("London Flight Deals
+  # <londondeals@...>"), not just the bare address. Also not a secret —
+  # it's the visible sender name on every email. Domain-level
+  # verification (DKIM/SPF on flightalert.rohit-nair.com) authorizes
+  # sending from any local part at that domain, so changing this and
+  # from_address together needed no new DNS work — confirmed by the next
+  # real test send, not just assumed.
+  from_name: "London Flight Deals"
   # Not secrets themselves — the *names* of env vars holding secrets,
   # read via os.environ.get, matching every other credential in this
   # project (PATTERNS.md §2's pattern). The actual API key and recipient

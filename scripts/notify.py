@@ -31,9 +31,11 @@ from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from email.utils import formataddr
 
 import detect
 import places
+import school_holidays
 from config import REPO_ROOT, load_config
 
 PREVIEW_PATH = REPO_ROOT / "scratch" / "digest_preview.html"
@@ -104,7 +106,12 @@ def _prepare_digest(flags, min_drop_pct, min_trip_nights=0):
     for f in latest.values():
         city, country, continent = places.resolve(f["destination"])
         tree[continent][f["destination"]].append(
-            {**f, "_city": city, "_country": country}
+            {
+                **f,
+                "_city": city,
+                "_country": country,
+                "_holiday": school_holidays.nearby(f),
+            }
         )
     return tree, len(latest)
 
@@ -142,7 +149,7 @@ def build_digest_text(flags, as_of, min_drop_pct, min_trip_nights=0):
     pct_bar = round(min_drop_pct * 100)
     fare_word = "fare" if count == 1 else "fares"
     lines = [
-        f"Flight Deal Scanner — weekly digest ({_fmt_date(as_of.isoformat())})",
+        f"London Flight Deals — weekly digest ({_fmt_date(as_of.isoformat())})",
         "",
         f"{count} {fare_word} at least {pct_bar}% below their recent typical price,",
         "grouped by region then destination, biggest drop first.",
@@ -167,6 +174,8 @@ def build_digest_text(flags, as_of, min_drop_pct, min_trip_nights=0):
                     f"({nights} night{'s' if nights != 1 else ''})  "
                     f"flagged {_fmt_date(f['flagged_at'])}"
                 )
+                if f["_holiday"]:
+                    lines.append(f"      ★ near {f['_holiday']} (+/-2 days)")
             lines.append("")
         lines.append("")
 
@@ -230,9 +239,26 @@ def _render_fare_row(f, dcode, is_last):
             <td colspan="2" style="font-size:13px;color:#64748b;padding-top:4px;font-family:{_FONT_STACK};">
               {_esc(f['origin_airport'])} &rarr; {_esc(dcode)} &middot; {_fmt_date(f['depart_date'])} to {_fmt_date(f['return_date'])} &middot; {nights} night{'s' if nights != 1 else ''}
             </td>
-          </tr>
+          </tr>{_render_holiday_tag(f['_holiday'])}
         </table>
       </td></tr>"""
+
+
+def _render_holiday_tag(holiday):
+    """A small violet tag under the route/dates line when the trip falls
+    within +/-2 days of a London school holiday (school_holidays.nearby())
+    — deliberately a different colour from the drop-% badge above it, so
+    it reads as a different *kind* of signal (timing, not price) rather
+    than another price tier. Empty string when there's no match, so the
+    caller can always splice this in unconditionally."""
+    if not holiday:
+        return ""
+    return f"""
+          <tr>
+            <td colspan="2" style="padding-top:6px;">
+              <span style="display:inline-block;background:#f3e8ff;color:#6b21a8;font-size:11px;font-weight:700;padding:3px 9px;border-radius:999px;font-family:{_FONT_STACK};">&#127890; Near {_esc(holiday)} (&plusmn;2 days)</span>
+            </td>
+          </tr>"""
 
 
 def _render_destination_card(dcode, fares):
@@ -284,7 +310,7 @@ def build_digest_html(flags, as_of, min_drop_pct, min_trip_nights=0):
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Flight Deal Scanner</title>
+<title>London Flight Deals</title>
 <style>
   body {{ margin:0; padding:0; background:#f1f5f9; }}
   a {{ color:#1e3a8a; }}
@@ -299,7 +325,7 @@ def build_digest_html(flags, as_of, min_drop_pct, min_trip_nights=0):
     <tr><td align="center" style="padding:24px 12px;">
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="width:100%;max-width:600px;">
         <tr><td style="background:#0f172a;padding:28px 24px;border-radius:12px 12px 0 0;">
-          <div style="color:#ffffff;font-size:20px;font-weight:700;font-family:{_FONT_STACK};">&#9992;&#65039; Flight Deal Scanner</div>
+          <div style="color:#ffffff;font-size:20px;font-weight:700;font-family:{_FONT_STACK};">&#9992;&#65039; London Flight Deals</div>
           <div style="color:#94a3b8;font-size:13px;padding-top:6px;font-family:{_FONT_STACK};">Weekly digest &middot; {date_label}</div>
         </td></tr>
         <tr><td style="background:#ffffff;padding:20px 24px 4px;">
@@ -345,6 +371,12 @@ def send_email(config, subject, text_body, html_body, recipients):
         )
     username = config["notify"]["smtp_username"]
     from_address = config["notify"]["from_address"]
+    from_name = config["notify"].get("from_name")
+    # formataddr, not an f-string, so a name with a space (or anything
+    # that needs quoting/escaping) always produces a valid header — the
+    # bare address is what still goes to sendmail() below as the SMTP
+    # envelope sender, which is a separate thing from this display name.
+    from_header = formataddr((from_name, from_address)) if from_name else from_address
 
     # multipart/alternative, text first then HTML: RFC 2046 has the client
     # render the *last* part it understands, so this prefers HTML where
@@ -353,7 +385,7 @@ def send_email(config, subject, text_body, html_body, recipients):
     # than sending HTML-only and leaving those with nothing readable.
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
-    msg["From"] = from_address
+    msg["From"] = from_header
     msg["To"] = ", ".join(recipients)
     msg.attach(MIMEText(text_body, "plain", "utf-8"))
     msg.attach(MIMEText(html_body, "html", "utf-8"))
@@ -395,7 +427,7 @@ def run(config=None, as_of=None, force=False, dry_run=False, test_address=None):
         print(f"\nnotify: HTML version written to {PREVIEW_PATH} for visual review")
         return {"sent": False, "reason": "dry_run", "flags_count": count}
 
-    subject = f"Flight Deal Scanner: {count} deal(s) this week"
+    subject = f"London Flight Deals: {count} deal(s) this week"
 
     if test_address:
         print(f"notify: sending ONE test email to {test_address} (not the real recipient list)")

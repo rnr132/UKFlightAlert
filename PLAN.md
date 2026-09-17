@@ -517,3 +517,67 @@ confirm true `multipart/alternative` structure, correct part order, and
 utf-8 survival; mocked-SMTP login/from/to unchanged from the Resend
 verification above. Not yet sent as a real email in this form — that's
 next, pending a look at the rendered preview.
+
+## Three more, same day (2026-09-17): 25% → 30%, school-holiday tag, rebrand
+
+**Threshold 0.25 → 0.30**, requested directly rather than off another
+volume complaint. Real 7-day window at the time: 16 flags / 16 unique —
+already fully unique, nothing left to collapse at this bar (30%+ drops
+are rare enough that repeat-flagging the same itinerary within a week
+essentially stops happening). 35% was also checked and recorded (11/11)
+in case 30 still isn't the number once seen rendered.
+
+**New: `scripts/school_holidays.py`.** Tags a fare when its
+`[depart_date, return_date]` falls within ±2 days of a London school
+holiday — shown as a small violet pill under the route/dates line,
+deliberately a different colour from the drop-% badge so it reads as a
+different *kind* of signal (timing, not price). There is no single
+"London" term-date calendar — England's ~33 boroughs, plus academies, each
+set their own, typically within a few days of one another — so this is
+one common-case estimate, which is what was actually asked for ("most
+likely"), not a per-school lookup.
+- **2026-27 school year: sourced from real, currently-published borough
+  term dates** (Bexley, Greenwich, Lambeth, Harrow, Hounslow, Tower
+  Hamlets — checked live; they converged on the same or near-identical
+  dates rather than needing to be reconciled). Each holiday window is the
+  *full calendar gap* between terms (weekends included, not just the
+  Mon–Fri closed days) — the more honest definition of "on holiday," and
+  it hands the ±2-day tolerance a more generous edge on top.
+- **2027-28 school year: extrapolated**, not sourced — no borough
+  publishes that far out yet (typically 1-2 years ahead only). Same
+  seasonal pattern as 2026-27, weekday-verified so term boundaries land on
+  the right days of the week, but flagged inline in the module and here as
+  an estimate to revisit once real dates exist.
+- Checked against real flag data, both directions: Harare's 13–30 Oct trip
+  correctly tags "October half-term"; Faro's 4–11 Nov trip — one day past
+  the tolerance window's end (half-term's calendar gap ends 1 Nov, +2 days
+  = 3 Nov) — correctly does *not* tag. The boundary is precise, not just
+  roughly right.
+
+**Rebrand: "Flight Deal Scanner" → "London Flight Deals" in every
+recipient-facing string** (subject line, HTML `<title>`, in-body header,
+text-digest header) **and the sender identity** (`from_address` →
+`londondeals@flightalert.rohit-nair.com`, new `from_name: "London Flight
+Deals"` sent via `email.utils.formataddr` — not hand-built string
+interpolation, so a display name with a space is always encoded
+correctly). The project's own internal name (this repo, `PLAN.md`,
+`README.md`) is untouched — that's a separate thing from what a recipient
+sees in their inbox, and only the latter was asked for. Domain-level
+DKIM/SPF verification authorizes any local part at `flightalert.
+rohit-nair.com`, so the address change needed no new DNS work — confirmed
+by construction, to be reconfirmed by the next real test send.
+
+**A judgment call, flagged rather than assumed:** the in-body HTML/text
+header was changed to match the new sender name even though only "the
+name from which the emails come" was asked for — a `From: London Flight
+Deals` envelope opening into a body still headed "Flight Deal Scanner"
+would read as a mismatch, not a deliberate two-name design. Easy to
+revert if the internal project name was meant to stay visible in the body.
+
+**Verified:** real data end to end at 30% (16, matches the pre-check);
+`From:` header parsed back apart to confirm `"London Flight Deals"
+<londondeals@flightalert.rohit-nair.com>` — display name in the header,
+bare address still passed to `sendmail()` as the SMTP envelope sender,
+which are two different things and easy to conflate; browser-checked at
+375px again after the changes (not assumed still fine from the last
+check). Not yet sent as a real email — next.
