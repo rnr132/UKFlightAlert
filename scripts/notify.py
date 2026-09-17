@@ -70,6 +70,19 @@ def _fmt_date(iso_str):
     return f"{d.day}-{d.strftime('%b')}-{d.strftime('%y')}"
 
 
+def _date_range_label(depart_iso, return_iso):
+    """'1-8 Oct 26' when both dates share a month and year — how a person
+    actually writes a date range, not two full dates stitched together
+    with "to". Falls back to '18-Dec-26 to 1-Jan-27' (both full dates)
+    whenever month or year differs, so a range that crosses either is
+    never ambiguous about which date belongs to which month."""
+    d = date.fromisoformat(depart_iso)
+    r = date.fromisoformat(return_iso)
+    if (d.year, d.month) == (r.year, r.month):
+        return f"{d.day}–{r.day} {d.strftime('%b')} {d.strftime('%y')}"
+    return f"{_fmt_date(depart_iso)} to {_fmt_date(return_iso)}"
+
+
 def _prepare_digest(flags, min_drop_pct, min_trip_nights=0):
     """Filter to fares that dropped at least `min_drop_pct` and stay at
     least `min_trip_nights` nights, collapse repeat flags of the same
@@ -201,8 +214,11 @@ def build_digest_text(flags, as_of, min_drop_pct, min_trip_nights=0):
             for f in fares:
                 pct = round(f["drop_pct_vs_median"] * 100)
                 nights = _trip_nights(f)
+                # Destination dropped here — it's already the heading two
+                # lines up, and repeating it on every fare under it was
+                # exactly the redundancy flagged and fixed 2026-09-17.
                 lines.append(
-                    f"    {f['origin_airport']} -> {dcode}  "
+                    f"    {f['origin_airport']}  "
                     f"GBP {f['price_gbp']:.0f}  "
                     f"(typically GBP {f['prior_median_gbp']:.0f}, {pct}% below)"
                 )
@@ -210,7 +226,7 @@ def build_digest_text(flags, as_of, min_drop_pct, min_trip_nights=0):
                 if airline_label:
                     lines.append(f"      {airline_label}")
                 lines.append(
-                    f"      {_fmt_date(f['depart_date'])} to {_fmt_date(f['return_date'])}  "
+                    f"      {_date_range_label(f['depart_date'], f['return_date'])}  "
                     f"({nights} night{'s' if nights != 1 else ''})  "
                     f"flagged {_fmt_date(f['flagged_at'])}"
                 )
@@ -277,7 +293,7 @@ def _render_fare_row(f, dcode, is_last):
           </tr>
           <tr>
             <td colspan="2" style="font-size:13px;color:#64748b;padding-top:4px;font-family:{_FONT_STACK};">
-              {_esc(f['origin_airport'])} &rarr; {_esc(dcode)} &middot; {_fmt_date(f['depart_date'])} to {_fmt_date(f['return_date'])} &middot; {nights} night{'s' if nights != 1 else ''}
+              {_esc(f['origin_airport'])} &middot; {_date_range_label(f['depart_date'], f['return_date'])} &middot; {nights} night{'s' if nights != 1 else ''}
             </td>
           </tr>{_render_airline_row(f)}{_render_holiday_tag(f['_holiday'])}
         </table>
