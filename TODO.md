@@ -48,38 +48,56 @@ that's a suggestion, not something from the brief.
 
 ---
 
-## Waiting on Yahoo account aging before the live test send (2026-09-XX)
+## Resend domain verification — the remaining delivery setup step (2026-09-17)
 
-Delivery mechanism is decided (email, weekly digest) and `scripts/notify.py`
-is fully built and tested — see `PLAN.md`'s delivery section. Telegram was
-ruled out; Gmail, Proton, Outlook.com, and Zoho were all considered as the
-sender and each hit a real wall (account-creation rate limits after
-creating several new accounts in one week; Proton free tier can't send
-without a paid-plan Bridge setup or a Business-tier SMTP token; Outlook.com
-is retiring basic-auth app passwords for real OAuth2; Zoho's clean free
-tier is tied to owning a custom domain). Yahoo Mail is the one with no
-structural blocker — but a **new** Yahoo account can't generate an app
-password until it looks like an established one to Yahoo's own fraud
-heuristics, no published timeframe, anecdotally days to weeks.
+**Decided:** Resend (free transactional-email tier), replacing the
+Gmail/Yahoo consumer-webmail search. Full reasoning in `PLAN.md`'s
+delivery section — short version: Gmail rate-limited *creating* a new
+account after several attempts in one week, and Yahoo gated *app-password
+issuance* behind a "does this look like an established account" fraud
+heuristic that stayed unresolved for two-plus weeks with no published
+timeframe. Both are anti-abuse gates aimed at a human signing up for a
+mailbox, which this never was. Resend is built for programmatic sending
+and has no such gate — it asks for a one-time domain verification instead,
+which is slower to describe but has a definite end.
 
-**What's actually pending:** the Yahoo account needs to age into
-eligibility. Worth *using* it normally in the meantime (logging in,
-sending/receiving a few real emails) rather than leaving it dormant, since
-"consistent normal usage" is the literal criterion.
+`config/sweep.yaml`, `.env.example`, and `scripts/notify.py` are already
+updated for Resend's SMTP relay (`smtp.resend.com`, fixed username
+`resend`, an API key as the password). What's left needs a human — account
+creation and DNS changes aren't things to automate:
 
-**Nothing else is blocked by this.** The nightly sweep, detection, and
-retention pipeline all run independently of delivery being resolved.
-
-**Once the app password works:**
-1. `python scripts/notify.py --test <address>` — one real email, format
+1. Create a free Resend account at [resend.com](https://resend.com) — no
+   card required.
+2. **Add and verify a sending domain.** Recommend a dedicated subdomain of
+   `rohit-nair.com` rather than the bare domain — e.g.
+   `flightalert.rohit-nair.com` — so this stays isolated from the main
+   domain's mail reputation and from whatever the personal site's own
+   email eventually does. Resend's dashboard generates the exact DNS
+   records (DKIM/SPF, a couple of TXT/CNAME entries) to add at the
+   domain's DNS host once the subdomain is entered.
+3. Update `config/sweep.yaml`'s `notify.from_address` to match whatever
+   local part is chosen on the verified domain
+   (`deals@flightalert.rohit-nair.com` is the current placeholder).
+4. Generate an API key at
+   [resend.com/api-keys](https://resend.com/api-keys) and put it in
+   `.env` locally as `SMTP_PASSWORD`.
+5. `python scripts/notify.py --test <address>` — one real email, format
    review, before anyone else ever sees one.
-2. Update `config/sweep.yaml`'s `notify.smtp_host`/`smtp_port` to Yahoo's
-   (`smtp.mail.yahoo.com`, 587) — currently still set to Gmail's values.
-3. Add `SMTP_USER`/`SMTP_PASSWORD`/`NOTIFY_RECIPIENTS` as GitHub Secrets
-   (the real family/friend list this time, not the test address).
-4. Wire `notify.py` into `sweep.py` and the workflow, the same way
+6. Add `SMTP_PASSWORD`/`NOTIFY_RECIPIENTS` as GitHub Secrets (the real
+   family/friend list this time, not the test address) — `smtp_username`
+   and `from_address` are plain config now, not secrets, so neither needs
+   one.
+7. Wire `notify.py` into `sweep.py` and the workflow, the same way
    `detect.py` already is — as its own explicit step, not bundled
    silently into the test.
+
+**Nothing else is blocked by this.** The nightly sweep, detection, and
+retention pipeline all run independently of delivery being resolved — true
+before this pivot and still true after.
+
+**The Yahoo account** needs nothing further — just stop the deliberate
+"use it normally so it ages" routine, since it's no longer on the critical
+path.
 
 ---
 

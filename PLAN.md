@@ -350,10 +350,11 @@ per-night email would have quietly contradicted that.
   `write_delta()`/`write_flags()`.
 - `notify.digest_weekday` matches `far_sweep_weekday` (Sunday) — one
   predictable weekly rhythm for the whole system rather than two.
-- Recipients and SMTP credentials are env vars only
-  (`SMTP_USER`/`SMTP_PASSWORD`/`NOTIFY_RECIPIENTS`) — real people's email
-  addresses can't live in this public repo's committed config, unlike
-  everything in `config/sweep.yaml` so far.
+- Recipients and the SMTP password are env vars only
+  (`SMTP_PASSWORD`/`NOTIFY_RECIPIENTS` — see the 2026-09-17 entry below for
+  why `SMTP_USER` is gone) — real people's email addresses can't live in
+  this public repo's committed config, unlike everything in
+  `config/sweep.yaml` so far.
 
 **Verified without ever sending a real email:** the 7-day window
 correctly excludes a flag from 9 days back while including ones from
@@ -397,3 +398,54 @@ cap or per-recipient region filtering before it goes live — noted, not built.
   signal** — both are config values precisely so this doesn't need a code
   change once there's enough real history to know whether 5 nights and
   15% are the right numbers.
+
+## Delivery sender: Gmail/Yahoo search abandoned, Resend chosen (2026-09-17)
+
+The provider search recorded above (2026-09-01) picked Yahoo as the sender
+because it had no *structural* blocker, only an aging wait. That wait
+turned out to be the wrong axis to have optimized for. Two different
+anti-abuse gates were hit back to back in practice: Gmail rate-limited
+*creating* a new account after several attempts in one week (TODO.md,
+observed before 2026-09-01), then Yahoo's fraud heuristic on *app-password
+issuance* for a new-looking account stayed unresolved for two-plus weeks
+with no published timeframe and no way to check progress — still stuck
+when raised again on 2026-09-17.
+
+Both gates are checking the same thing: is this a human signing up for a
+mailbox. That was never the actual shape of the problem — a script
+emailing a fixed small list weekly isn't a human opening an inbox, and
+every consumer webmail provider's fraud model is tuned to be suspicious of
+exactly that mismatch. The fix isn't a more patient wait for a better
+consumer account; it's a tool built for programmatic sending in the first
+place.
+
+**Switched to Resend** (free transactional-email tier: 3,000/month,
+100/day, SMTP relay included, no card required). Checked live against
+Resend's current SMTP docs rather than assumed: host `smtp.resend.com`,
+port 587 with STARTTLS — the same connection shape `send_email()` already
+used, so the TLS handshake code is untouched. One real incompatibility
+with the old Gmail-shaped code: Resend's SMTP username is always the
+literal string `resend`, decoupled entirely from the `From:` address,
+whereas the Gmail model conflated "login identity" and "sender identity"
+into a single value (`SMTP_USER`, used for both). `notify.py`,
+`config/sweep.yaml`, and `.env.example` are updated for this split:
+`smtp_username` and `from_address` are now separate config fields, and
+since neither is secret (the from address is the visible sender on every
+email regardless), only the API key stays in `SMTP_PASSWORD`.
+`sender_env_var`/`SMTP_USER` are retired — nothing meaningful belongs in
+them under this model.
+
+The trade for losing Yahoo's "no structural blocker, just wait" property:
+Resend needs a verified sending domain, i.e. one-time DNS changes on
+`rohit-nair.com` — see TODO.md for the exact remaining steps. Slower to
+describe than "wait," but bounded and self-directed rather than an
+unbounded wait on someone else's fraud model — and it was available the
+entire time the Yahoo wait was running.
+
+**Not verified end-to-end with a real send yet.** That needs the domain
+verification and an API key, both human steps — account creation and DNS
+edits aren't things to automate, so they're recorded as the remaining
+checklist in TODO.md rather than done here. `notify.py`'s send-path logic
+otherwise carries forward unchanged from its 2026-09-01 verification (same
+`smtplib`/STARTTLS flow, same fail-loudly-on-missing-credential guard at
+startup) — only the provider-specific values moved.
