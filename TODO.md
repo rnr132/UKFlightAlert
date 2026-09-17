@@ -92,7 +92,8 @@ updated for Resend's SMTP relay (`smtp.resend.com`, fixed username
 **This whole checklist is now done.** Every step 1-7 above is complete —
 delivery is genuinely production-ready, not just code-ready. The next
 real send happens automatically the first time `notify.digest_weekday`
-(Sunday) comes around on the nightly workflow; nothing further to do
+(Friday, moved from Sunday 2026-09-17 — see `config/sweep.yaml`) comes
+around on the nightly workflow; nothing further to do
 unless the format or recipient list needs changing.
 
 **Worth a deliberate look before that first real Sunday send:** confirm

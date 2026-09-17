@@ -750,3 +750,21 @@ it doesn't retroactively re-score prices that haven't moved. So this fix
 is real and correct, but it's forward-looking only — none of today's
 three examples will reappear in a real digest unless their price changes
 again in a future sweep.
+
+## digest_weekday: Sunday -> Friday (2026-09-17)
+
+Reasoning stated directly: land with the weekend still ahead to decide,
+not with it already over — a Sunday-morning digest gives a reader zero
+days to act on it before Monday; a Friday-morning one gives two.
+
+This breaks the original "`notify.digest_weekday` matches
+`far_sweep_weekday`... one predictable weekly rhythm... rather than two
+different cadences to track" reasoning from the 2026-09-01 delivery
+section above — deliberately, not by oversight. That coupling was a
+cognitive-load argument (one weekly day to remember, not two), not a
+functional dependency: `far_sweep_weekday` only decides which night's
+sweep also covers months 7-18, nothing about it reads or depends on
+`digest_weekday`. Only the digest day was actually asked to move, so
+`far_sweep_weekday` was left at Sunday rather than moved to match — noted
+here in case the two cadences drifting apart matters later, rather than
+silently reintroduced without a record of it.

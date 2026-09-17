@@ -86,9 +86,10 @@ minutes — see [Brief.md](Brief.md) for why.
 ### 4. Weekly digest secrets
 
 The workflow's "Send weekly digest" step runs every night but only
-actually sends on `notify.digest_weekday` (Sunday) — every other night
-it exits cleanly with nothing to do. It needs two more repository
-secrets, same place as above:
+actually sends on `notify.digest_weekday` (Friday — chosen so it lands
+with the weekend still ahead, not behind) — every other night it exits
+cleanly with nothing to do. It needs two more repository secrets, same
+place as above:
 
 - `SMTP_PASSWORD` — a [Resend](https://resend.com) API key. The SMTP
   username and sender address aren't secrets, so they live in

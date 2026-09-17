@@ -129,10 +129,20 @@ monitoring:
 notify:
   # Weekly digest, not per-night — matches what README.md and PLAN.md
   # already committed to before a delivery mechanism was even chosen:
-  # "weekly signal, not real-time alert, no urgency language." Same day
-  # as far_sweep_weekday above, for one predictable weekly rhythm across
-  # the whole system rather than two different cadences to track.
-  digest_weekday: 6  # Sunday
+  # "weekly signal, not real-time alert, no urgency language."
+  #
+  # Moved Sunday -> Friday on 2026-09-17: deliberately so a recipient
+  # reads it with the weekend still ahead to decide, rather than reading
+  # it as the weekend is ending. No longer the same day as
+  # far_sweep_weekday above (Sunday) — the two were originally kept in
+  # sync "for one predictable weekly rhythm... rather than two different
+  # cadences to track", a cognitive-load argument with no functional
+  # coupling (far_sweep_weekday only decides which night also sweeps the
+  # far tier; nothing about it depends on when the digest fires). Left
+  # far_sweep_weekday alone rather than moving it too, since only the
+  # digest day was asked for — flagging the divergence here rather than
+  # silently reintroducing "two cadences to track" without saying so.
+  digest_weekday: 4  # Friday
   # Resend (transactional email, free tier) — switched from the
   # Gmail/Yahoo consumer-webmail search on 2026-09-17. Those providers
   # anti-abuse-gate *account creation* (Gmail rate-limited new accounts)
