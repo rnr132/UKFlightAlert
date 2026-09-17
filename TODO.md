@@ -172,3 +172,51 @@ architectural cost — re-litigates `PLAN.md §2`'s endpoint choice) or
 building links by hand via
 [travelpayouts.com/programs/100/tools](https://www.travelpayouts.com/programs/100/tools).
 Verify which situation this actually is before assuming either.
+
+---
+
+## Personal website: land the project page that's already built
+
+Raised 2026-09-17. A case-study writeup already exists
+(`uk-flight-deal-scanner.md`, handed over that session) — first person,
+matched to the site's existing voice, built for `rohit-nair.com`'s Astro
+content collection at `src/content/experiments/` (a separate repo from
+this one). The site's chrome (back link, date line, footer) comes from
+its own layout, not from the file's content, so the file is meant to
+drop in as-is, frontmatter keys adjusted to match whatever an existing
+entry (`credit-watchlist-experiment.md`) actually uses.
+
+**Status as of the last check:** `rohit-nair.com/experiments/
+uk-flight-deal-scanner` still 404s — written, not yet landed in the site
+repo. This is a "finish wiring in something already built" task, not a
+"write it" task if picked up again — check whether the file still exists
+wherever it was saved before rebuilding it.
+
+## Website signup form for the weekly digest
+
+Raised 2026-09-17, not scoped or started. The idea: let a visitor to the
+personal-site page above add themselves to the digest's recipient list
+directly, instead of the current manual process (edit `.env`'s
+`NOTIFY_RECIPIENTS` line by hand, then `gh secret set` the whole updated
+list — GitHub Secrets are write-only, so `.env` is the only place the
+real current list is ever readable again).
+
+**The real constraint to design against, not the mechanism:** the
+personal site is a static Astro site with no described backend (checked
+while building the page above), and this whole project runs under a hard
+zero-cost rule (`Brief.md`). Whatever collects a signup has to clear
+both. Not designed yet — worth checking what's actually available before
+picking an approach, the same way every other provider choice in this
+project got settled (e.g. whether Resend's already-verified domain could
+plausibly receive inbound mail too, before assuming a whole separate
+service is needed).
+
+## Check GitHub status of this project
+
+Raised 2026-09-17, scope not given — recorded as-is rather than guessed
+at. Plausible readings worth checking before starting, not assumed:
+repo presentability (description, topics, README polish) ahead of
+linking it publicly from the personal site above; GitHub Actions/CI
+health specifically (though `data/heartbeat.jsonl` and `data/
+notify_heartbeat.jsonl` already cover the pipeline's own health); or
+something else entirely. Ask which before acting.
