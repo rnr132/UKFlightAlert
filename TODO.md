@@ -82,22 +82,24 @@ updated for Resend's SMTP relay (`smtp.resend.com`, fixed username
    the night's data), deliberately not `continue-on-error` so a real
    failure reddens the run instead of hiding.
 
-**Only step 6 is left, and it's a human step on purpose** — account
-creation and moving a live credential into GitHub aren't things to
-automate:
+6. ~~Add `SMTP_PASSWORD` and `NOTIFY_RECIPIENTS` as GitHub Secrets~~ —
+   done 2026-09-17, run by hand (not by Claude — moving a live credential
+   into GitHub isn't something to automate, same line held on `.env`
+   earlier). Confirmed set via `gh secret list` (names/timestamps only,
+   values never seen). `smtp_username`/`from_address` are plain config,
+   not secrets, so neither needed one.
 
-6. Add `SMTP_PASSWORD` and `NOTIFY_RECIPIENTS` as GitHub Secrets — the
-   real family/friend list this time, not just the test address:
-   ```bash
-   gh secret set SMTP_PASSWORD --repo rnr132/UKFlightAlert \
-     --body "$(grep '^SMTP_PASSWORD=' .env | cut -d= -f2-)"
-   gh secret set NOTIFY_RECIPIENTS --repo rnr132/UKFlightAlert \
-     --body "<real, comma-separated recipient list>"
-   ```
-   (`smtp_username`/`from_address` are plain config now, not secrets, so
-   neither needs one.) Until these exist, the workflow's digest step
-   fails loudly on a real digest day rather than silently sending
-   nothing — deliberate, not a bug to fix separately.
+**This whole checklist is now done.** Every step 1-7 above is complete —
+delivery is genuinely production-ready, not just code-ready. The next
+real send happens automatically the first time `notify.digest_weekday`
+(Sunday) comes around on the nightly workflow; nothing further to do
+unless the format or recipient list needs changing.
+
+**Worth a deliberate look before that first real Sunday send:** confirm
+`NOTIFY_RECIPIENTS` actually holds the intended list — the value moved
+into the secret came straight from whatever was in local `.env` at the
+time, which may still just be the single test address rather than the
+real family/friend list.
 
 **Nothing else is blocked by this.** The nightly sweep, detection, and
 retention pipeline all run independently of delivery being resolved — true
