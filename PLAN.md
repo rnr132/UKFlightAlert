@@ -601,3 +601,27 @@ real off-by-one caught in *my own test*, not the code: a trip returning
 exactly on the tolerance boundary correctly still counts (inclusive
 `>=`), which my first hand-written expectation got wrong before checking
 it against actual behaviour.
+
+## places.py: two more metro-code overrides — CHI, ROM (2026-09-17)
+
+Noticed by inspection of the rendered digest, not a report: `CHI`
+(Chicago's metro code, spanning `ORD`+`MDW`) sat under "Other" instead of
+resolving. Confirmed rather than assumed before fixing —
+`airportsdata.load("IATA").get("CHI")` really does return `None`, while
+`ORD` and `MDW` individually resolve fine, same shape as the three
+existing overrides (`BUH`/`TCI`/`BAK`, §"digest rework" above). `ROM`
+(Rome, spanning `FCO`+`CIA`) gets the same treatment — not currently
+showing in the digest at the 30% bar, but the same class of gap, fixed
+alongside rather than waiting for it to resurface and get re-diagnosed
+from scratch. Country/continent strings for both
+(`("Chicago","United States","North America")`,
+`("Rome","Italy","Europe")`) match exactly what `pycountry_convert`
+produces for a real airport in the same country — checked directly, not
+retyped from memory.
+
+Verified against real data: `CHI` now renders as "Chicago, United States"
+under a new NORTH AMERICA section (the digest's first — everything so far
+had been Africa/Europe/Asia), and the "OTHER" section — which `CHI` was
+the only occupant of at the current bar — disappears entirely rather than
+printing empty, confirming that section is genuinely data-driven and not
+a static placeholder.
