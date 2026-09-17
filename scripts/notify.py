@@ -35,6 +35,7 @@ from email.utils import formataddr
 
 import detect
 import places
+import airlines
 import school_holidays
 from config import REPO_ROOT, load_config
 
@@ -155,6 +156,24 @@ def _holiday_phrase(holiday):
     return f"{_HOLIDAY_RELATION_PHRASING[relation]} {label}"
 
 
+def _airline_label(f):
+    """'Vueling VY1234' — the name someone would actually search for to
+    book this exact flight, not just the 2-letter code. Falls back to the
+    raw code if airlines.resolve() doesn't know it (never crashes, never
+    hides the flight number even when the name is unknown).
+
+    None when the flag predates this field (added 2026-09-17 — the 7-day
+    window mixes old and new flags for the next week, and there's nothing
+    to backfill an already-written record with), so callers can treat
+    "no airline info" the same way they already treat "no holiday match"
+    — check truthiness, render nothing, never crash on an old record."""
+    airline = f.get("airline")
+    flight_number = f.get("flight_number")
+    if not airline or not flight_number:
+        return None
+    return f"{airlines.resolve(airline)} {airline}{flight_number}"
+
+
 def build_digest_text(flags, as_of, min_drop_pct, min_trip_nights=0):
     """Plain-text digest body, or None if there's nothing to say. This is
     the multipart/alternative fallback for clients/screen readers that
@@ -187,6 +206,9 @@ def build_digest_text(flags, as_of, min_drop_pct, min_trip_nights=0):
                     f"GBP {f['price_gbp']:.0f}  "
                     f"(typically GBP {f['prior_median_gbp']:.0f}, {pct}% below)"
                 )
+                airline_label = _airline_label(f)
+                if airline_label:
+                    lines.append(f"      {airline_label}")
                 lines.append(
                     f"      {_fmt_date(f['depart_date'])} to {_fmt_date(f['return_date'])}  "
                     f"({nights} night{'s' if nights != 1 else ''})  "
@@ -257,9 +279,27 @@ def _render_fare_row(f, dcode, is_last):
             <td colspan="2" style="font-size:13px;color:#64748b;padding-top:4px;font-family:{_FONT_STACK};">
               {_esc(f['origin_airport'])} &rarr; {_esc(dcode)} &middot; {_fmt_date(f['depart_date'])} to {_fmt_date(f['return_date'])} &middot; {nights} night{'s' if nights != 1 else ''}
             </td>
-          </tr>{_render_holiday_tag(f['_holiday'])}
+          </tr>{_render_airline_row(f)}{_render_holiday_tag(f['_holiday'])}
         </table>
       </td></tr>"""
+
+
+def _render_airline_row(f):
+    """A muted line under the route/dates line naming the airline and
+    flight number — the detail someone actually needs to go and book this
+    (a route/price alone isn't bookable; "Vueling VY1234" is). Empty
+    string when the flag predates this field (_airline_label() returns
+    None for those), same "splice in unconditionally" convention as
+    _render_holiday_tag()."""
+    label = _airline_label(f)
+    if not label:
+        return ""
+    return f"""
+          <tr>
+            <td colspan="2" style="font-size:13px;color:#64748b;padding-top:2px;font-family:{_FONT_STACK};">
+              {_esc(label)}
+            </td>
+          </tr>"""
 
 
 def _render_holiday_tag(holiday):

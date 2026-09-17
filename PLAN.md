@@ -625,3 +625,79 @@ had been Africa/Europe/Asia), and the "OTHER" section — which `CHI` was
 the only occupant of at the current bar — disappears entirely rather than
 printing empty, confirming that section is genuinely data-driven and not
 a static placeholder.
+
+## Airline + flight number, end to end (2026-09-17)
+
+Asked directly, with the reason stated up front: so a reader can go book
+what they're looking at, not just recognise it's cheap. The data was
+already there and unused — `airline`/`flight_number` are original
+schema columns (`PLAN.md §4`), already load-bearing internally
+(`_price_hash()` keys change detection on them), just never copied into a
+flag record. `detect.py` now includes both when a flag is built.
+
+**No pip package covers this the way `airportsdata` covers airports** —
+checked before building anything, not assumed absent (see `scripts/
+airlines.py`'s docstring for exactly what was searched). Vendored
+`scripts/airlines_data.csv` instead, generated from OpenFlights' open
+airline dataset, filtered to active + valid-2-letter-IATA rows. That
+source has genuine duplicate-code entries even among active rows
+(`VY` matches both Vueling Airlines and a much smaller Formosa Airlines).
+Checked against one real night's swept data (`data/deltas/2026-09-17.
+parquet`) rather than trusted blind:
+
+- **91 distinct airline codes** in that one delta alone (destinations are
+  worldwide, so this was always going to be a big list, not a handful of
+  overrides like the `places.py` ones).
+- **89 of 91 resolved** against the active+valid-IATA subset with no
+  further work. `X1` has only a stale, inactive OpenFlights entry ("Nik
+  Airways", marked "N") — left unresolved (falls back to the raw code)
+  rather than shown on unreliable data, same convention `places.py`
+  already uses for genuinely unknown codes. `RR` is the deliberate
+  exclusion below.
+- **A second real data-quality pass, caught by reading the generated file
+  before committing it, not by any test:** the first cut of the CSV kept
+  every row whose IATA field was exactly 2 characters — which let 10
+  junk entries through (`&T`, `-+`, `--`, `..`, `;;`, a literal `\N`
+  null-dump artifact, three Cyrillic-character codes) that happen to be
+  2 characters but aren't real IATA codes at all. None were in the real
+  91, so nothing user-visible broke, but they'd have shipped as silently
+  wrong reference data. Fixed by validating `^[A-Z0-9]{2}$`, not just
+  length — regenerated, re-confirmed all 91 real codes and the 4 hand-
+  verified ones unchanged, junk count zero.
+- **4 of the source's 19 duplicate-code groups actually appeared in real
+  data** (`JL`, `LH`, `SQ`, `VY`) and were resolved by hand, checked
+  against the actual route each flew (`VY` on `LHR`→`ALC` is obviously
+  Vueling, a major European carrier on a plausible Spain route — not the
+  small Taiwanese airline sharing that code in the source data). The
+  other 15 duplicate groups never showed up in real data; they got a
+  best-effort tiebreak (prefer a name without a Cargo/Domestic/Express/
+  Regional qualifier, else the shorter name) that's recorded as
+  unverified in the module docstring rather than presented with the same
+  confidence as the 4 checked ones.
+- **One code dropped outright by hand, not by any rule:** `RR`'s only
+  "active" OpenFlights match was "REXAIR VIRTUEL" — a virtual/community
+  entity, not a real commercial carrier a flight-search API would return.
+  Spotted by reading the generated output and noticing one entry looked
+  wrong, not by an automated check. Excluded; falls back to the raw code
+  like `X1`.
+
+Displayed as "Vueling Airlines VY1234" under the route/dates line, in
+both the text and HTML renderers, built from one shared `_airline_label()`
+so the two can't disagree — same pattern as `_holiday_phrase()`.
+
+**A real gap, handled deliberately rather than hit by accident:** flags
+already sitting in `data/flags/*.jsonl` were written by the old
+`detect.py` and have no `airline`/`flight_number` keys at all. The 7-day
+digest window mixes those with newly-flagged entries for about a week.
+`_airline_label()` returns `None` for a flag missing the fields (checked
+with a synthetic flag built to look like an old one, not just assumed
+safe), and both renderers treat that exactly like "no holiday match" —
+omit the line, never crash. Confirmed against real current data (today's
+existing flags correctly show no airline line) and against a synthetic
+flag with the fields present (confirmed the happy path renders in both
+text and HTML, including alongside a holiday tag on the same fare card).
+
+**Booking links are explicitly future work, not started** — recorded in
+`TODO.md` along with what's already known from the abandoned
+`grouped_prices` endpoint's `link` field, so that doesn't need
+rediscovering later.

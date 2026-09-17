@@ -133,6 +133,13 @@ def detect(sweep_date, config=None):
                         "prior_median_gbp": float(baseline_median),
                         "drop_pct_vs_median": round(1 - (tonight_price / baseline_median), 3),
                         "observation_count": int(obs_count),
+                        # Added 2026-09-17 so notify.py can show who's
+                        # selling the fare, not just the route and price —
+                        # both already exist on every row (they're part of
+                        # _price_hash()'s key), just weren't copied into
+                        # the flag record before now.
+                        "airline": row["airline"],
+                        "flight_number": row["flight_number"],
                     }
                 )
                 newly_flagged[key] = tonight_price

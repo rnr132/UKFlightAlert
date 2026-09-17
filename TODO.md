@@ -129,3 +129,35 @@ When the issue shows up: re-resolve each SHA independently first (the
 issue body includes the `git ls-remote --tags` line), skim that
 release's notes for anything that touches this kind of workflow, bump
 the pins, close the issue.
+
+---
+
+## Future: a real booking link on each digest entry
+
+Raised 2026-09-17, explicitly deferred — not scoped or started, just
+recorded so it doesn't need rediscovering. The digest now names the
+airline and flight number (added same day — `scripts/airlines.py`), which
+is enough to go search for the flight yourself; a direct link would skip
+that step.
+
+**What's already known, from the "book a real trip" item above:** the
+`/aviasales/v3/grouped_prices` response inspected back in step 1's dry run
+had a `link` field — an Aviasales deep link with tracking parameters
+attached, i.e. already an affiliate link, not something to construct or
+register separately. `grouped_prices` isn't wired into `sweep.py` at all
+(dropped after step 1 in favour of `prices_cheap` — see `PLAN.md §2` — it
+returns "best deal today" data, the wrong shape for a route-matrix sweep).
+`prices_cheap`, the endpoint actually swept, was never checked for a
+similar field.
+
+**So the real first step here is a live check, not a design decision:**
+does `/v1/prices/cheap` carry a link (or enough — origin/destination/
+dates/flight number — to build one via Travelpayouts' documented deep-link
+tools instead)? If yes, this is mostly plumbing: thread it through
+`storage.py`'s schema, `detect.py`'s flag dict, `notify.py`'s render —
+the same shape of change as airline/flight_number just was. If no, it
+needs either switching the sweep to a link-carrying endpoint (real
+architectural cost — re-litigates `PLAN.md §2`'s endpoint choice) or
+building links by hand via
+[travelpayouts.com/programs/100/tools](https://www.travelpayouts.com/programs/100/tools).
+Verify which situation this actually is before assuming either.
