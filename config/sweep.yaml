@@ -95,12 +95,14 @@ detection:
   # Flag only when tonight's price is a genuine new low AND at least this
   # fraction below its own recent median. Either condition alone is too
   # weak on its own — see PLAN.md's Phase 2 section for why both are
-  # required together. Raised 0.15 -> 0.20 on 2026-09-10: at 15% the first
-  # real week produced 140 flagged fares, far more than a weekly digest
-  # should carry. notify.py also filters the digest to this same bar, so
-  # the change takes effect on the existing record immediately, not just
-  # on new flags.
-  drop_pct_threshold: 0.20
+  # required together. Raised 0.15 -> 0.20 on 2026-09-10 (140 -> ~80
+  # flags/week), then 0.20 -> 0.25 on 2026-09-17 after the redesigned
+  # HTML digest was still carrying 43 unique itineraries at 20% — real
+  # 7-day window at the time: 47 flags / 43 unique at 20%, 29 unique at
+  # 25%. notify.py's digest builder filters to this same bar at render
+  # time (not the stored data/flags/*.jsonl files), so the change takes
+  # effect on the existing record immediately, not just on new flags.
+  drop_pct_threshold: 0.25
   # Minimum trip length in nights (return_date - depart_date). Same-day
   # and next-day round trips aren't leisure fares — usually a data quirk
   # or a positioning fare — so they don't get flagged. notify.py filters

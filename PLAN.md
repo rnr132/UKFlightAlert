@@ -449,3 +449,71 @@ checklist in TODO.md rather than done here. `notify.py`'s send-path logic
 otherwise carries forward unchanged from its 2026-09-01 verification (same
 `smtplib`/STARTTLS flow, same fail-loudly-on-missing-credential guard at
 startup) — only the provider-specific values moved.
+
+**Update, same day:** domain verified, API key generated, real test send
+succeeded on the first attempt — full chain (Namecheap DNS → Resend →
+SMTP relay → inbox) confirmed live, not just mocked.
+
+## Digest redesign: HTML + 25% bar (2026-09-17)
+
+The first real test send (plain text, 20% bar) landed with 47 flags / 43
+unique itineraries — too plain and too long. Two changes, both requested
+directly rather than inferred:
+
+**1. Threshold 0.20 → 0.25.** Checked against the real 7-day window
+before picking a number rather than guessing: 47 flags/43 unique at 20%,
+31/29 at 25%, 16/16 at 30%, 11/11 at 35%. 25% was the ask; the others are
+recorded here in case 29 still reads as too many once seen rendered.
+`_prepare_digest()`'s filtering is unchanged in mechanism from the
+2026-09-10 change — config value only, reshapes the existing record at
+render time, no data migration.
+
+**2. Plain text → HTML, with a text/plain part kept alongside it, not
+replaced.** `send_email()` now sends `multipart/alternative`
+(`text/plain` first, `text/html` second — RFC 2046 has the client render
+the *last* part it understands, so this prefers HTML where supported and
+still degrades cleanly on clients/screen readers/settings that don't want
+it). Layout: table-based with inline styles throughout, not CSS
+grid/flexbox — the one layout approach that survives Outlook's Word
+rendering engine as well as Gmail and phone mail apps. No remote images or
+web fonts, so nothing for image-blocking to break and nothing to fail to
+load; a system font stack renders natively everywhere instead. Deal cards
+grouped region → destination → fares, same tree `_prepare_digest()` already
+built for the text version — one shared data-preparation function feeding
+two renderers, so text and HTML can never disagree about which fares
+qualify. Drop-% badges are tier-coloured (blue 25–34%, green 35–49%, amber
+"🔥" 50%+) so magnitude reads at a glance, not just from the number.
+
+**A real bug found only by looking at it, not by reading the code:** the
+first render used a hard-coded `width="600"` table. Fine on a wide preview
+pane; on a real phone width (checked at 375px, the size that matters most
+since most email gets read on a phone) it overflowed instead of shrinking,
+cutting the discount badge off the right edge entirely behind a horizontal
+scrollbar. Fixed to `width="100%"` with `max-width:600px` — fluid up to a
+cap rather than fixed — and re-checked at both 375px and desktop width
+before trusting it. This is exactly why the visual check happened in an
+actual browser rather than from reading the generated markup.
+
+**A second, smaller bug fixed in the same pass, found while refactoring
+rather than by symptom:** the subject line and `flags_count` used
+`len(flags)` — every flag record read from the 7-day window — not the
+count of unique itineraries actually shown after filtering and collapsing
+repeats. Harmless while the threshold was stable (today's 43 unique
+happened to equal 43... actually equalled 47 raw by coincidence of a
+stable bar), but silently wrong the moment the threshold changes: old
+flags written under a lower bar stay in the JSONL files and would still
+be counted in the subject even after no longer clearing the digest's own
+bar. `_prepare_digest()` now returns the shown count directly and every
+caller (subject line, "N fares" line in both renderers, `run()`'s return
+dict) uses that, not a raw flags count.
+
+**Verified:** real 7-day data end to end at the new bar (29 unique
+itineraries, matches the pre-computed number above) via `--dry-run`;
+non-ASCII place names (e.g. "Türkiye") and the unresolved-destination
+fallback (bare code, no dangling formatting — PLAN.md's "Other" case)
+both render correctly; the MIME message was parsed back apart (not just
+grepped as raw text, which broke on quoted/base64 transfer-encoding) to
+confirm true `multipart/alternative` structure, correct part order, and
+utf-8 survival; mocked-SMTP login/from/to unchanged from the Resend
+verification above. Not yet sent as a real email in this form — that's
+next, pending a look at the rendered preview.
