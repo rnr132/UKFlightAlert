@@ -39,6 +39,8 @@ import airlines
 import school_holidays
 from config import REPO_ROOT, load_config
 
+NOTIFY_HEARTBEAT_PATH = REPO_ROOT / "data" / "notify_heartbeat.jsonl"
+
 PREVIEW_PATH = REPO_ROOT / "scratch" / "digest_preview.html"
 
 
@@ -473,9 +475,84 @@ def send_email(config, subject, text_body, html_body, recipients):
         server.sendmail(from_address, recipients, msg.as_string())
 
 
+# ---------------------------------------------------------------------------
+# Observability (2026-09-17), added the same day notify.py was wired into
+# the nightly workflow. sweep.py has carried this exact pattern since Phase
+# 1 (PATTERNS.md §4.4's fix, applied from day one) — mirrored here, not
+# reinvented, now that notify.py runs on the same unattended nightly
+# cadence and can fail exactly as silently. append_heartbeat()/
+# check_staleness() live in sweep.py already; this is their notify.py
+# counterpart, not a generalised shared version — the two files' heartbeat
+# shapes differ enough (rows/calls/flags vs sent/reason/recipients) that
+# forcing one shared function would cost more clarity than the duplication.
+# ---------------------------------------------------------------------------
+
+
+def append_notify_heartbeat(record):
+    """One JSON line per *real* invocation — not --dry-run or --test,
+    which are manual/exploratory, not the production cadence this exists
+    to watch. Includes skipped nights (not the digest day, or no flags
+    cleared the bar): a genuinely quiet night still appends a line, same
+    convention as sweep.py's own heartbeat, so what this protects against
+    is "the step stopped running", not "there was nothing to send"."""
+    NOTIFY_HEARTBEAT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with open(NOTIFY_HEARTBEAT_PATH, "a") as f:
+        f.write(json.dumps(record, default=str) + "\n")
+
+
+def check_notify_staleness(config, as_of=None):
+    """Warn loudly, at startup, if notify.py's last real run is older
+    than expected. Reuses monitoring.staleness_warning_hours — the same
+    threshold sweep.py already checks against, since notify.py is invoked
+    on that same nightly cadence now (conditionally sending, but running
+    every night), not a separate weekly-scale threshold to keep in sync
+    by hand."""
+    as_of = as_of or datetime.now(timezone.utc)
+    threshold = config.get("monitoring", {}).get("staleness_warning_hours", 36)
+
+    if not NOTIFY_HEARTBEAT_PATH.exists():
+        print("notify: no heartbeat log yet — this looks like the first run.")
+        return
+    with open(NOTIFY_HEARTBEAT_PATH) as f:
+        lines = [line for line in f if line.strip()]
+    if not lines:
+        print("notify: heartbeat log exists but is empty — treating as first run.")
+        return
+
+    last = json.loads(lines[-1])
+    last_run_at = datetime.fromisoformat(last["run_at"])
+    gap_hours = (as_of - last_run_at).total_seconds() / 3600.0
+    if gap_hours > threshold:
+        print(
+            f"*** WARNING: notify.py's last real run was {gap_hours:.1f}h ago, "
+            f"over the {threshold}h threshold. The digest step may have been "
+            f"skipped or failed — check the Actions tab. ***"
+        )
+
+
+def _notify_heartbeat_record(as_of, is_digest_day, sent, reason, flags_count, recipients_count=None):
+    record = {
+        "run_at": datetime.now(timezone.utc).isoformat(),
+        "as_of": as_of.isoformat(),
+        "is_digest_day": is_digest_day,
+        "sent": sent,
+        "reason": reason,
+        "flags_count": flags_count,
+    }
+    if recipients_count is not None:
+        record["recipients_count"] = recipients_count
+    return record
+
+
 def run(config=None, as_of=None, force=False, dry_run=False, test_address=None):
     config = config or load_config()
     as_of = as_of or datetime.now(timezone.utc).date()
+    # --dry-run/--test are manual and exploratory; only the unattended
+    # path (what the nightly workflow actually calls) gets a heartbeat
+    # entry or a staleness check against it.
+    is_real_run = not dry_run and not test_address
+    if is_real_run:
+        check_notify_staleness(config)
 
     is_digest_day = as_of.weekday() == config["notify"]["digest_weekday"]
     if not (force or is_digest_day or test_address):
@@ -483,6 +560,10 @@ def run(config=None, as_of=None, force=False, dry_run=False, test_address=None):
             f"notify: today ({as_of}, weekday={as_of.weekday()}) isn't the "
             f"digest day ({config['notify']['digest_weekday']}) — skipping"
         )
+        if is_real_run:
+            append_notify_heartbeat(
+                _notify_heartbeat_record(as_of, False, False, "not_digest_day", 0)
+            )
         return {"sent": False, "reason": "not_digest_day"}
 
     flags = _load_recent_flags(as_of)
@@ -492,6 +573,10 @@ def run(config=None, as_of=None, force=False, dry_run=False, test_address=None):
     text_body = build_digest_text(flags, as_of, min_drop_pct, min_trip_nights)
     if text_body is None:
         print("notify: nothing over the drop threshold in the last 7 days — nothing to send")
+        if is_real_run:
+            append_notify_heartbeat(
+                _notify_heartbeat_record(as_of, is_digest_day, False, "no_flags", 0)
+            )
         return {"sent": False, "reason": "no_flags", "flags_count": 0}
     html_body = build_digest_html(flags, as_of, min_drop_pct, min_trip_nights)
     _, count = _prepare_digest(flags, min_drop_pct, min_trip_nights)
@@ -520,6 +605,10 @@ def run(config=None, as_of=None, force=False, dry_run=False, test_address=None):
 
     print(f"notify: sending digest with {count} flag(s) to {len(recipients)} recipient(s)")
     send_email(config, subject, text_body, html_body, recipients)
+    if is_real_run:
+        append_notify_heartbeat(
+            _notify_heartbeat_record(as_of, is_digest_day, True, None, count, len(recipients))
+        )
     return {"sent": True, "recipients_count": len(recipients), "flags_count": count}
 
 

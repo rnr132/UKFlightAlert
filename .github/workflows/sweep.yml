@@ -46,6 +46,26 @@ jobs:
           TRAVELPAYOUTS_TOKEN: ${{ secrets.TRAVELPAYOUTS_TOKEN }}
         run: python scripts/sweep.py
 
+      - name: Send weekly digest
+        # No flags: notify.py checks notify.digest_weekday itself and
+        # skips cleanly (exit 0) on every other night — see its own
+        # day-of-week gate. Runs before the commit step below, not after,
+        # so its heartbeat line (data/notify_heartbeat.jsonl) lands in the
+        # same nightly commit as everything else, matching how sweep.py's
+        # own heartbeat/compact/rollup all happen before the one commit
+        # rather than needing a second one.
+        #
+        # Deliberately NOT continue-on-error: a real send failure (bad
+        # credentials, a broken DNS record, Resend/API trouble) should
+        # fail this step and redden the run, the same as a sweep failure
+        # — the per-account Actions-failure email (README) is the thing
+        # meant to notice that, not silence.
+        timeout-minutes: 5
+        env:
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          NOTIFY_RECIPIENTS: ${{ secrets.NOTIFY_RECIPIENTS }}
+        run: python scripts/notify.py
+
       - name: Commit data
         # Runs even if the sweep step above failed (a partial-failure
         # night should still commit whatever it did fetch — see the

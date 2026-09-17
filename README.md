@@ -24,12 +24,14 @@ after comparing assumptions against the live API).
   section). Comparing against "is this normal for April" needs having seen
   a previous April — about 12 months of history, not weeks — so that kind
   of seasonal comparison isn't attempted yet.
-- **Detection finds; delivery exists but isn't live yet.**
-  `scripts/notify.py` builds a weekly email digest of flagged deals — but
-  it's deliberately not wired into the nightly workflow, and hasn't sent a
-  real email to anyone yet. One test send to a single chosen address
-  needs to happen first (see below), same as verifying one origin before
-  the full sweep.
+- **Detection finds; delivery is wired in but not yet live to real
+  people.** `scripts/notify.py` builds a styled weekly email digest
+  (via [Resend](https://resend.com)) and runs as part of the nightly
+  workflow — but until `SMTP_PASSWORD`/`NOTIFY_RECIPIENTS` exist as
+  GitHub Secrets (see below), a real digest day just fails loudly rather
+  than silently doing nothing. Test sends to a single chosen address
+  have already gone out successfully; the real recipient list hasn't
+  been added yet.
 - **The repo is the database.** There's no server. Every night's prices
   (and any flags) are committed back into `data/` by the GitHub Action
   itself.
@@ -81,6 +83,25 @@ noticed whenever someone happens to check the Actions tab.
 The repo must be **public** for this to run on free, unlimited Actions
 minutes — see [Brief.md](Brief.md) for why.
 
+### 4. Weekly digest secrets
+
+The workflow's "Send weekly digest" step runs every night but only
+actually sends on `notify.digest_weekday` (Sunday) — every other night
+it exits cleanly with nothing to do. It needs two more repository
+secrets, same place as above:
+
+- `SMTP_PASSWORD` — a [Resend](https://resend.com) API key. The SMTP
+  username and sender address aren't secrets, so they live in
+  `config/sweep.yaml`'s `notify` block instead (see `PLAN.md`'s delivery
+  section for why Resend, not Gmail/Yahoo).
+- `NOTIFY_RECIPIENTS` — comma-separated real email addresses. Never
+  committed anywhere, for the obvious reason.
+
+Until both exist, a real digest day fails the step loudly (missing
+credentials are checked at startup, not partway through an SMTP call) —
+which is deliberate: a silent skip would be worse than a red run, same
+reasoning as the Actions-failure email above.
+
 ## Running it
 
 ```bash
@@ -98,7 +119,9 @@ python scripts/storage.py --stats
 python scripts/storage.py --compact --rollup
 python scripts/detect.py --date 2026-09-15   # re-check a specific past night
 
-# Weekly digest email -- NOT wired into the automatic pipeline yet
+# Weekly digest email -- also runs automatically as part of the nightly
+# workflow now, but only sends on notify.digest_weekday and only once
+# SMTP_PASSWORD/NOTIFY_RECIPIENTS exist as GitHub Secrets
 python scripts/notify.py --dry-run           # build it, print it, send nothing
 python scripts/notify.py --test you@x.com    # ONE real email, for format review
 ```
@@ -129,6 +152,10 @@ data/
                              created on nights with something to say
   heartbeat.jsonl            one line per run: rows fetched/changed,
                              failures, cheapest fare seen, flags found
+  notify_heartbeat.jsonl     one line per real notify.py run (not
+                             --dry-run/--test): sent or skipped, why, to
+                             how many — the same silent-gap protection
+                             as heartbeat.jsonl, for the digest send
 ```
 
 Deltas exist because Parquet is compressed binary — a one-row change
@@ -184,7 +211,7 @@ scripts/
   sweep.py              fetch, throttle, retry, ingest, heartbeat
   storage.py            normalize, delta write, compaction, rollup
   detect.py             deal detection — flags a genuine new low vs. own history
-  notify.py             weekly email digest — built, not yet wired in (see above)
+  notify.py             weekly email digest, wired into the nightly Action (see above)
   check_action_pins.py  quarterly: is any SHA-pinned action behind its latest
                         release? opens a tracking issue if so (stdlib only)
 .github/workflows/

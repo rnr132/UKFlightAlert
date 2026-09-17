@@ -63,33 +63,41 @@ which is slower to describe but has a definite end.
 
 `config/sweep.yaml`, `.env.example`, and `scripts/notify.py` are already
 updated for Resend's SMTP relay (`smtp.resend.com`, fixed username
-`resend`, an API key as the password). What's left needs a human — account
-creation and DNS changes aren't things to automate:
+`resend`, an API key as the password).
 
-1. Create a free Resend account at [resend.com](https://resend.com) — no
-   card required.
-2. **Add and verify a sending domain.** Recommend a dedicated subdomain of
-   `rohit-nair.com` rather than the bare domain — e.g.
-   `flightalert.rohit-nair.com` — so this stays isolated from the main
-   domain's mail reputation and from whatever the personal site's own
-   email eventually does. Resend's dashboard generates the exact DNS
-   records (DKIM/SPF, a couple of TXT/CNAME entries) to add at the
-   domain's DNS host once the subdomain is entered.
-3. Update `config/sweep.yaml`'s `notify.from_address` to match whatever
-   local part is chosen on the verified domain
-   (`deals@flightalert.rohit-nair.com` is the current placeholder).
-4. Generate an API key at
-   [resend.com/api-keys](https://resend.com/api-keys) and put it in
-   `.env` locally as `SMTP_PASSWORD`.
-5. `python scripts/notify.py --test <address>` — one real email, format
-   review, before anyone else ever sees one.
-6. Add `SMTP_PASSWORD`/`NOTIFY_RECIPIENTS` as GitHub Secrets (the real
-   family/friend list this time, not the test address) — `smtp_username`
-   and `from_address` are plain config now, not secrets, so neither needs
-   one.
-7. Wire `notify.py` into `sweep.py` and the workflow, the same way
-   `detect.py` already is — as its own explicit step, not bundled
-   silently into the test.
+**Done, in order:**
+1. ~~Create a free Resend account.~~
+2. ~~Add and verify a sending domain~~ — `flightalert.rohit-nair.com`,
+   DKIM/SPF confirmed live via DNS lookup, not just Resend's dashboard
+   saying so.
+3. ~~Update `notify.from_address`~~ — `londondeals@flightalert.
+   rohit-nair.com`, matching the "London Flight Deals" rebrand
+   (`PLAN.md`, 2026-09-17).
+4. ~~Generate an API key, put it in local `.env`.~~
+5. ~~`python scripts/notify.py --test <address>`~~ — sent successfully,
+   format approved after two redesign passes (HTML, then a decluttering
+   fix from direct feedback).
+7. ~~Wire `notify.py` into the workflow~~ — runs as its own step every
+   night, before the commit (so its heartbeat lands in the same commit as
+   the night's data), deliberately not `continue-on-error` so a real
+   failure reddens the run instead of hiding.
+
+**Only step 6 is left, and it's a human step on purpose** — account
+creation and moving a live credential into GitHub aren't things to
+automate:
+
+6. Add `SMTP_PASSWORD` and `NOTIFY_RECIPIENTS` as GitHub Secrets — the
+   real family/friend list this time, not just the test address:
+   ```bash
+   gh secret set SMTP_PASSWORD --repo rnr132/UKFlightAlert \
+     --body "$(grep '^SMTP_PASSWORD=' .env | cut -d= -f2-)"
+   gh secret set NOTIFY_RECIPIENTS --repo rnr132/UKFlightAlert \
+     --body "<real, comma-separated recipient list>"
+   ```
+   (`smtp_username`/`from_address` are plain config now, not secrets, so
+   neither needs one.) Until these exist, the workflow's digest step
+   fails loudly on a real digest day rather than silently sending
+   nothing — deliberate, not a bug to fix separately.
 
 **Nothing else is blocked by this.** The nightly sweep, detection, and
 retention pipeline all run independently of delivery being resolved — true
