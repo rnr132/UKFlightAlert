@@ -121,13 +121,30 @@ notify:
   # as far_sweep_weekday above, for one predictable weekly rhythm across
   # the whole system rather than two different cadences to track.
   digest_weekday: 6  # Sunday
-  smtp_host: "smtp.gmail.com"
+  # Resend (transactional email, free tier) — switched from the
+  # Gmail/Yahoo consumer-webmail search on 2026-09-17. Those providers
+  # anti-abuse-gate *account creation* (Gmail rate-limited new accounts)
+  # or *app-password issuance* (Yahoo's "does this look established"
+  # fraud heuristic — no published timeframe, stuck two+ weeks). Both
+  # gate humans signing up for a mailbox, not automated senders. Resend
+  # is built for the latter: no aging wait, just a one-time domain
+  # verification. Full comparison in PLAN.md's delivery section, the
+  # remaining setup checklist in TODO.md.
+  smtp_host: "smtp.resend.com"
   smtp_port: 587
-  # None of these are secrets themselves — they're the *names* of env
-  # vars holding secrets, read via os.environ.get, matching every other
-  # credential in this project (PATTERNS.md §2's pattern). The actual
-  # sender address, password, and recipient list never belong in this
-  # committed, public file.
-  sender_env_var: "SMTP_USER"
+  # Resend's SMTP username is always this literal string — it names the
+  # *protocol account*, not the sender. Not a secret. Confirmed against
+  # Resend's own SMTP docs, not assumed.
+  smtp_username: "resend"
+  # Must be an address on a domain verified in the Resend dashboard.
+  # Not a secret either — it's the visible sender on every email sent —
+  # so unlike the old Gmail-era sender it can live here in plain config.
+  # This is a placeholder until the real domain/subdomain is verified;
+  # update it then (TODO.md has the steps).
+  from_address: "deals@flightalert.rohit-nair.com"
+  # Not secrets themselves — the *names* of env vars holding secrets,
+  # read via os.environ.get, matching every other credential in this
+  # project (PATTERNS.md §2's pattern). The actual API key and recipient
+  # list never belong in this committed, public file.
   password_env_var: "SMTP_PASSWORD"
   recipients_env_var: "NOTIFY_RECIPIENTS"

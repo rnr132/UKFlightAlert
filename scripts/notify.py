@@ -158,26 +158,32 @@ def _load_recipients(config):
 
 
 def send_email(config, subject, body, recipients):
-    sender = os.environ.get(config["notify"]["sender_env_var"])
+    # Resend's SMTP model splits "login identity" from "sender identity"
+    # (2026-09-17 — see PLAN.md's delivery section for why Gmail/Yahoo were
+    # dropped): smtp_username is a fixed literal, not a secret, so it lives
+    # in config/sweep.yaml like smtp_host/smtp_port; from_address is the
+    # visible sender on every email regardless, so it's plain config too.
+    # Only the API key is a secret.
     password = os.environ.get(config["notify"]["password_env_var"])
-    if not sender or not password:
+    if not password:
         raise RuntimeError(
-            f"{config['notify']['sender_env_var']} / "
-            f"{config['notify']['password_env_var']} not set. Put them in "
-            f".env locally (see .env.example) or as GitHub Secrets for the "
+            f"{config['notify']['password_env_var']} not set. Put it in "
+            f".env locally (see .env.example) or as a GitHub Secret for the "
             f"workflow. Failing here, at startup, rather than deep inside "
             f"an SMTP call."
         )
+    username = config["notify"]["smtp_username"]
+    from_address = config["notify"]["from_address"]
 
     msg = MIMEText(body)
     msg["Subject"] = subject
-    msg["From"] = sender
+    msg["From"] = from_address
     msg["To"] = ", ".join(recipients)
 
     with smtplib.SMTP(config["notify"]["smtp_host"], config["notify"]["smtp_port"]) as server:
         server.starttls()
-        server.login(sender, password)
-        server.sendmail(sender, recipients, msg.as_string())
+        server.login(username, password)
+        server.sendmail(from_address, recipients, msg.as_string())
 
 
 def run(config=None, as_of=None, force=False, dry_run=False, test_address=None):
