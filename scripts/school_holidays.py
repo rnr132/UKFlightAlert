@@ -45,18 +45,34 @@ TOLERANCE_DAYS = 2
 
 
 def nearby(flag):
-    """The label of the London school holiday whose window (padded by
-    TOLERANCE_DAYS on each side) overlaps this flag's [depart_date,
-    return_date], or None. Takes the flag dict directly, matching
-    notify.py's _trip_nights() convention, rather than pre-parsed dates.
+    """(label, relation) for the London school holiday this flag's trip
+    relates to, within TOLERANCE_DAYS of it — or None if it's nowhere
+    near any of them. `relation` is one of:
 
-    Windows don't overlap each other, so first match is the only match —
-    order doesn't otherwise matter."""
+      "during" — the trip's own [depart_date, return_date] genuinely
+                 overlaps the holiday's real (unpadded) window
+      "before" — the trip ends before the holiday starts, but within
+                 TOLERANCE_DAYS of its start
+      "after"  — the trip starts after the holiday ends, but within
+                 TOLERANCE_DAYS of its end
+
+    "during" is checked against the *real* window, not the padded one —
+    the padding only decides whether a non-overlapping trip is close
+    enough to mention at all, and shouldn't blur into a false "during".
+
+    Takes the flag dict directly, matching notify.py's _trip_nights()
+    convention, rather than pre-parsed dates. Windows don't overlap each
+    other, so at most one holiday can ever match — first (only) hit wins."""
     depart = date.fromisoformat(flag["depart_date"])
     ret = date.fromisoformat(flag["return_date"])
     for label, start, end in HOLIDAYS:
         buf_start = start - timedelta(days=TOLERANCE_DAYS)
         buf_end = end + timedelta(days=TOLERANCE_DAYS)
-        if depart <= buf_end and ret >= buf_start:
-            return label
+        if depart > buf_end or ret < buf_start:
+            continue  # outside the tolerance window entirely
+        if depart <= end and ret >= start:
+            return label, "during"
+        if ret < start:
+            return label, "before"
+        return label, "after"  # only remaining case: depart > end
     return None

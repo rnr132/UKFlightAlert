@@ -137,6 +137,24 @@ def _place_label(head, dcode):
     return place or dcode
 
 
+_HOLIDAY_RELATION_PHRASING = {
+    "during": "During",
+    "before": "Just before",
+    "after": "Just after",
+}
+
+
+def _holiday_phrase(holiday):
+    """'During October half-term' / 'Just before Christmas holidays' /
+    'Just after February half-term' — human phrasing for a
+    school_holidays.nearby() result, shared by both renderers so the
+    wording can't drift between the text and HTML versions. `holiday` is
+    the (label, relation) tuple, or None (caller checks truthiness
+    first)."""
+    label, relation = holiday
+    return f"{_HOLIDAY_RELATION_PHRASING[relation]} {label}"
+
+
 def build_digest_text(flags, as_of, min_drop_pct, min_trip_nights=0):
     """Plain-text digest body, or None if there's nothing to say. This is
     the multipart/alternative fallback for clients/screen readers that
@@ -175,7 +193,7 @@ def build_digest_text(flags, as_of, min_drop_pct, min_trip_nights=0):
                     f"flagged {_fmt_date(f['flagged_at'])}"
                 )
                 if f["_holiday"]:
-                    lines.append(f"      ★ near {f['_holiday']} (+/-2 days)")
+                    lines.append(f"      ★ {_holiday_phrase(f['_holiday'])}")
             lines.append("")
         lines.append("")
 
@@ -249,14 +267,17 @@ def _render_holiday_tag(holiday):
     within +/-2 days of a London school holiday (school_holidays.nearby())
     — deliberately a different colour from the drop-% badge above it, so
     it reads as a different *kind* of signal (timing, not price) rather
-    than another price tier. Empty string when there's no match, so the
-    caller can always splice this in unconditionally."""
+    than another price tier. Text carries the during/before/after
+    distinction (_holiday_phrase()), not the colour — one consistent tag
+    style, since that's what was actually asked for. Empty string when
+    there's no match, so the caller can always splice this in
+    unconditionally."""
     if not holiday:
         return ""
     return f"""
           <tr>
             <td colspan="2" style="padding-top:6px;">
-              <span style="display:inline-block;background:#f3e8ff;color:#6b21a8;font-size:11px;font-weight:700;padding:3px 9px;border-radius:999px;font-family:{_FONT_STACK};">&#127890; Near {_esc(holiday)} (&plusmn;2 days)</span>
+              <span style="display:inline-block;background:#f3e8ff;color:#6b21a8;font-size:11px;font-weight:700;padding:3px 9px;border-radius:999px;font-family:{_FONT_STACK};">&#127890; {_esc(_holiday_phrase(holiday))}</span>
             </td>
           </tr>"""
 

@@ -581,3 +581,23 @@ bare address still passed to `sendmail()` as the SMTP envelope sender,
 which are two different things and easy to conflate; browser-checked at
 375px again after the changes (not assumed still fine from the last
 check). Not yet sent as a real email — next.
+
+**Refined same day: "near {holiday}" → during/before/after.**
+`school_holidays.nearby()` now classifies the relation, not just
+proximity — "during" is a genuine overlap against the holiday's *real*
+window (not the padded one, so this can't blur into a false "during");
+"before"/"after" are the two ways a trip can miss the real window but
+still land inside the ±2-day tolerance. Display text carries the
+distinction ("During October half-term" / "Just before …" / "Just
+after …"); the pill itself stays one consistent colour, since only the
+wording was asked to change.
+
+Verified two ways: real flag data re-run at the new wording (Hurghada's
+post-Christmas trip → "Just after", Harare's Oct trip → "During", both
+match a hand-check done before running); and a synthetic boundary sweep,
+since the real data didn't happen to contain a "before" case to exercise
+that branch directly rather than trust it by symmetry with "after". One
+real off-by-one caught in *my own test*, not the code: a trip returning
+exactly on the tolerance boundary correctly still counts (inclusive
+`>=`), which my first hand-written expectation got wrong before checking
+it against actual behaviour.
