@@ -116,13 +116,36 @@ def _prepare_digest(flags, min_drop_pct, min_trip_nights=0):
     Returns (None, 0) if nothing clears the bar — the shared "nothing to
     send" signal both renderers and run() check.
     """
+    enriched = _eligible_fares(flags, min_drop_pct, min_trip_nights)
+    if enriched is None:
+        return None, 0
+    tree = defaultdict(lambda: defaultdict(list))
+    for f in enriched:
+        tree[f["_continent"]][f["destination"]].append(f)
+    return tree, len(enriched)
+
+
+def _eligible_fares(flags, min_drop_pct, min_trip_nights):
+    """The filter -> collapse -> enrich step every digest grouping shares
+    (region/destination today, trip-length as of 2026-09-18, whatever
+    comes after) — split out so a second grouping doesn't have to
+    re-derive "which fares qualify" as a second copy that could drift
+    from the first. Filters to fares that dropped at least `min_drop_pct`
+    and clear the trip-length floor
+    (detect.is_eligible_trip_length()), collapses repeat flags of the
+    same itinerary to the latest (which by the re-flag rule in detect.py
+    is also the lowest), then resolves each surviving fare's place and
+    school-holiday proximity once.
+
+    Returns a flat list of enriched fare dicts (each carrying _city,
+    _country, _continent, _holiday), or None if nothing clears the bar."""
     eligible = [
         f
         for f in flags
         if f["drop_pct_vs_median"] >= min_drop_pct and _flag_trip_eligible(f, min_trip_nights)
     ]
     if not eligible:
-        return None, 0
+        return None
 
     latest = {}
     for f in eligible:
@@ -130,18 +153,68 @@ def _prepare_digest(flags, min_drop_pct, min_trip_nights=0):
         if k not in latest or f["flagged_at"] > latest[k]["flagged_at"]:
             latest[k] = f
 
-    tree = defaultdict(lambda: defaultdict(list))
+    enriched = []
     for f in latest.values():
         city, country, continent = places.resolve(f["destination"])
-        tree[continent][f["destination"]].append(
+        enriched.append(
             {
                 **f,
                 "_city": city,
                 "_country": country,
+                "_continent": continent,
                 "_holiday": school_holidays.nearby(f),
             }
         )
-    return tree, len(latest)
+    return enriched
+
+
+_LENGTH_BUCKETS = [
+    ("Short trip", 1, 4),
+    ("Medium trip", 5, 9),
+    ("Long trip", 10, None),
+]
+
+
+def _length_bucket(nights):
+    """Bucket boundaries checked against a real week's data before being
+    picked, not guessed: the actual current spread (2,2,3,5,7,7,9,10,11,
+    12,14,14,15,21 nights) splits 3/4/7 across these three ranges — close
+    enough to even to be worth three buckets rather than two or four."""
+    for label, lo, hi in _LENGTH_BUCKETS:
+        if nights >= lo and (hi is None or nights <= hi):
+            return label
+    return _LENGTH_BUCKETS[-1][0]  # unreachable while min_trip_nights >= 1, kept as a safe fallback
+
+
+def _prepare_digest_by_length(flags, min_drop_pct, min_trip_nights=0):
+    """Same eligibility/collapse/enrich as _prepare_digest() (shared via
+    _eligible_fares(), so the two groupings can't disagree on which fares
+    qualify), grouped by trip-length bucket instead of region ->
+    destination. A destination whose own fares span more than one bucket
+    — nothing stops the same place having both a quick weekend fare and a
+    fortnight one — legitimately appears more than once here, each
+    listing only carrying the fares that belong in it; that's a real
+    consequence of changing the grouping axis, not a bug.
+
+    Returns (buckets, count): buckets is an ordered list of
+    (label, [fares]) for only the buckets with something in them this
+    week, each fares list sorted biggest-drop-first. count is the same
+    "unique itineraries shown" figure _prepare_digest() returns — not
+    len(flags), same reasoning."""
+    enriched = _eligible_fares(flags, min_drop_pct, min_trip_nights)
+    if enriched is None:
+        return None, 0
+
+    by_bucket = defaultdict(list)
+    for f in enriched:
+        by_bucket[_length_bucket(_trip_nights(f))].append(f)
+
+    buckets = [
+        (label, sorted(by_bucket[label], key=lambda x: x["drop_pct_vs_median"], reverse=True))
+        for label, _lo, _hi in _LENGTH_BUCKETS
+        if by_bucket[label]
+    ]
+    return buckets, len(enriched)
 
 
 def _best(fares):
@@ -257,6 +330,64 @@ def build_digest_text(flags, as_of, min_drop_pct, min_trip_nights=0):
     return "\n".join(lines)
 
 
+def build_digest_text_by_length(flags, as_of, min_drop_pct, min_trip_nights=0):
+    """Plain-text digest grouped by trip length instead of region ->
+    destination (2026-09-18) — an alternate grouping, not a replacement;
+    build_digest_text() is still what run() actually sends. Shares
+    eligibility/collapse with it via _prepare_digest_by_length(), so the
+    two views can never disagree about which fares qualify.
+
+    Since a destination is no longer the heading a fare sits under (the
+    same place can now appear in more than one bucket), the place name
+    and continent move back onto each fare's own line rather than being
+    inherited from a shared heading above it."""
+    buckets, count = _prepare_digest_by_length(flags, min_drop_pct, min_trip_nights)
+    if buckets is None:
+        return None
+
+    pct_bar = round(min_drop_pct * 100)
+    fare_word = "fare" if count == 1 else "fares"
+    lines = [
+        f"London Flight Deals — weekly digest ({_fmt_date(as_of.isoformat())})",
+        "",
+        f"{count} {fare_word} at least {pct_bar}% below their recent typical price,",
+        "grouped by trip length, biggest drop first within each.",
+        "",
+    ]
+    for label, fares in buckets:
+        lines.append(label.upper())
+        lines.append("-" * len(label))
+        for f in fares:
+            pct = round(f["drop_pct_vs_median"] * 100)
+            nights = _trip_nights(f)
+            place = _place_label(f, f["destination"])
+            lines.append(f"  {place} ({f['destination']}) · {f['_continent']}")
+            lines.append(
+                f"    {f['origin_airport']}  "
+                f"GBP {f['price_gbp']:.0f}  "
+                f"(typically GBP {f['prior_median_gbp']:.0f}, {pct}% below)"
+            )
+            airline_label = _airline_label(f)
+            if airline_label:
+                lines.append(f"      {airline_label}")
+            lines.append(
+                f"      {_date_range_label(f['depart_date'], f['return_date'])}  "
+                f"({nights} night{'s' if nights != 1 else ''})  "
+                f"flagged {_fmt_date(f['flagged_at'])}"
+            )
+            if f["_holiday"]:
+                lines.append(f"      ★ {_holiday_phrase(f['_holiday'])}")
+            lines.append("")
+        lines.append("")
+
+    lines.append(
+        "This is a weekly signal, not a real-time alert — the underlying "
+        "data can be a few days old. If a route above still looks good, "
+        "worth checking live before booking."
+    )
+    return "\n".join(lines)
+
+
 # ---------------------------------------------------------------------------
 # HTML rendering (2026-09-17). Table-based layout with inline styles on
 # every structurally-important element — not because <style> blocks never
@@ -288,7 +419,7 @@ def _esc(s):
     return html.escape(str(s), quote=True)
 
 
-def _render_fare_row(f, dcode, is_last):
+def _render_fare_row(f, is_last):
     pct = f["drop_pct_vs_median"]
     bg, fg, prefix = _badge(pct)
     nights = _trip_nights(f)
@@ -356,7 +487,7 @@ def _render_destination_card(dcode, fares):
     head = fares[0]
     place = _place_label(head, dcode)
     rows = "".join(
-        _render_fare_row(f, dcode, is_last=(i == len(fares) - 1)) for i, f in enumerate(fares)
+        _render_fare_row(f, is_last=(i == len(fares) - 1)) for i, f in enumerate(fares)
     )
     return f"""
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f8fafc;border:1px solid #eef2f6;border-radius:10px;margin-bottom:12px;">
@@ -422,6 +553,99 @@ def build_digest_html(flags, as_of, min_drop_pct, min_trip_nights=0):
         <tr><td style="background:#ffffff;padding:20px 24px 4px;">
           <p style="margin:0;font-size:15px;color:#334155;line-height:1.5;font-family:{_FONT_STACK};">
             <strong>{count} {fare_word}</strong> at least <strong>{pct_bar}%</strong> below their recent typical price, grouped by region then destination, biggest drop first.
+          </p>
+        </td></tr>
+        <tr><td style="background:#ffffff;">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0">{sections}
+          </table>
+        </td></tr>
+        <tr><td style="background:#ffffff;padding:8px 24px 28px;border-radius:0 0 12px 12px;">
+          <p style="margin:20px 0 0;font-size:12px;color:#94a3b8;line-height:1.6;border-top:1px solid #e2e8f0;padding-top:16px;font-family:{_FONT_STACK};">
+            This is a weekly signal, not a real-time alert &mdash; the underlying data can be a few days old. If a route above still looks good, worth checking live before booking.
+          </p>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>"""
+
+
+def _render_fare_card_by_length(f):
+    """One fare, one card — unlike _render_destination_card(), which
+    nests possibly-several fares under one shared destination heading,
+    a fare in the by-length view can't share a heading with anything:
+    the same destination might have another fare sitting in a different
+    bucket entirely. So the place name, code, *and* continent (no longer
+    inferable from a grouping heading above it) all move onto this card's
+    own heading — continent shown as a second small muted tag alongside
+    the code, same visual weight, not a new kind of element."""
+    place = _place_label(f, f["destination"])
+    return f"""
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f8fafc;border:1px solid #eef2f6;border-radius:10px;margin-bottom:12px;">
+      <tr><td style="padding:16px 18px;">
+        <div style="font-size:16px;font-weight:700;color:#0f172a;font-family:{_FONT_STACK};">
+          {_esc(place)} <span style="font-weight:400;color:#94a3b8;font-size:13px;">{_esc(f['destination'])} &middot; {_esc(f['_continent'])}</span>
+        </div>
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0">{_render_fare_row(f, is_last=True)}
+        </table>
+      </td></tr>
+    </table>"""
+
+
+def _render_length_section(label, fares):
+    cards = "".join(_render_fare_card_by_length(f) for f in fares)
+    return f"""
+        <tr><td style="padding:4px 24px 0;">
+          <p style="margin:20px 0 12px;font-size:12px;font-weight:700;letter-spacing:0.08em;color:#64748b;text-transform:uppercase;border-bottom:1px solid #e2e8f0;padding-bottom:8px;font-family:{_FONT_STACK};">{_esc(label)}</p>
+          {cards}
+        </td></tr>"""
+
+
+def build_digest_html_by_length(flags, as_of, min_drop_pct, min_trip_nights=0):
+    """HTML digest grouped by trip length instead of region -> destination
+    (2026-09-18) — an alternate view for comparison; build_digest_html()
+    is still what run() actually sends. Shares eligibility/collapse with
+    it via _prepare_digest_by_length(). Structurally identical to
+    build_digest_html() otherwise (header, footer, card styling) so the
+    two are a fair side-by-side comparison of the grouping choice alone,
+    not two different visual designs."""
+    buckets, count = _prepare_digest_by_length(flags, min_drop_pct, min_trip_nights)
+    if buckets is None:
+        return None
+
+    pct_bar = round(min_drop_pct * 100)
+    fare_word = "fare" if count == 1 else "fares"
+    date_label = _fmt_date(as_of.isoformat())
+    sections = "".join(_render_length_section(label, fares) for label, fares in buckets)
+    bucket_names = ", ".join(label for label, _fares in buckets)
+
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>London Flight Deals</title>
+<style>
+  body {{ margin:0; padding:0; background:#f1f5f9; }}
+  a {{ color:#1e3a8a; }}
+  table {{ border-collapse:collapse; }}
+</style>
+</head>
+<body style="margin:0;padding:0;background:#f1f5f9;">
+  <div style="display:none;max-height:0;overflow:hidden;opacity:0;">
+    {count} {fare_word} at least {pct_bar}% below their usual price this week &mdash; {_esc(bucket_names)}.
+  </div>
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f1f5f9;">
+    <tr><td align="center" style="padding:24px 12px;">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="width:100%;max-width:600px;">
+        <tr><td style="background:#0f172a;padding:28px 24px;border-radius:12px 12px 0 0;">
+          <div style="color:#ffffff;font-size:20px;font-weight:700;font-family:{_FONT_STACK};">&#9992;&#65039; London Flight Deals</div>
+          <div style="color:#94a3b8;font-size:13px;padding-top:6px;font-family:{_FONT_STACK};">Weekly digest &middot; {date_label}</div>
+        </td></tr>
+        <tr><td style="background:#ffffff;padding:20px 24px 4px;">
+          <p style="margin:0;font-size:15px;color:#334155;line-height:1.5;font-family:{_FONT_STACK};">
+            <strong>{count} {fare_word}</strong> at least <strong>{pct_bar}%</strong> below their recent typical price, grouped by trip length, biggest drop first within each.
           </p>
         </td></tr>
         <tr><td style="background:#ffffff;">

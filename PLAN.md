@@ -768,3 +768,44 @@ sweep also covers months 7-18, nothing about it reads or depends on
 `far_sweep_weekday` was left at Sunday rather than moved to match — noted
 here in case the two cadences drifting apart matters later, rather than
 silently reintroduced without a record of it.
+
+## An alternate grouping: by trip length, not region (2026-09-18)
+
+Asked for directly: "show me a format grouped by trip length" — built as
+a genuine alternative to compare, not a replacement.
+`build_digest_text_by_length()` / `build_digest_html_by_length()` exist
+alongside the region-grouped versions; `run()` still calls the region
+ones. Nothing wired into production changed.
+
+Shares eligibility with the region view through a new `_eligible_fares()`
+— the filter/collapse/place-resolve/holiday-check step both groupings
+now call, split out specifically so a second grouping couldn't become a
+second copy of that logic that could quietly drift from the first.
+Bucket boundaries (`_LENGTH_BUCKETS`: Short 1-4, Medium 5-9, Long 10+)
+were checked against a real week's actual distribution before being
+picked, not guessed — 2,2,3,5,7,7,9,10,11,12,14,14,15,21 nights splits
+3/4/7 across those three ranges, close enough to even to justify three
+buckets over two or four.
+
+**The real structural cost of the new axis, found by building it and
+looking, not assumed away:** region-grouping nests every fare to the
+same destination under one shared heading; trip-length grouping can't,
+because the same destination's fares might belong in different buckets.
+So every fare becomes its own full card, and the place name + continent
+— previously inherited from a shared destination heading — move onto
+each fare's own heading instead (continent shown as a second small muted
+tag next to the code, not a new kind of element). The real week's data
+happened not to contain a fare that splits across buckets, but it did
+show the cost anyway: Strasbourg has two fares that land in the *same*
+bucket, and where the region view would have shown one "Strasbourg,
+France" card with two price rows nested in it, the length view shows two
+separate "Strasbourg, France" cards. Less compact in that specific case —
+a real trade-off of the new axis, not a defect, but worth knowing before
+deciding whether to adopt it.
+
+Verified: real current data end to end in both text and HTML: bucket
+split matched the pre-check exactly (3/4/7); browser-checked at 375px,
+not assumed fine from the text output — one continent name ("North
+America") wraps to a second line on the fare-card heading at that width,
+which reads fine but is worth knowing since nothing wrapped there in the
+region-grouped view (continent was never inline with anything else).
