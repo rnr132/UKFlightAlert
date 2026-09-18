@@ -36,7 +36,18 @@ _DATA_PATH = Path(__file__).resolve().parent / "airlines_data.csv"
 # Codes found wrong or missing after checking real results — same
 # incremental-fix pattern as places.py's _OVERRIDES, for whatever the
 # vendored data gets wrong or lacks next.
-_OVERRIDES = {}
+_OVERRIDES = {
+    # 2026-09-18: a real digest showed "Avialeasing Aviation Company
+    # EC8299" on an LGW->KTW (Poland) route -- implausible for a Uzbek
+    # cargo airline (confirmed cargo-only, Wikipedia) on an EU short-haul
+    # route, so checked rather than assumed correct. OpenFlights' own
+    # data has a genuine error here: Avialeasing's ICAO (TWN) matches,
+    # but its real IATA code is V2, not EC (Wikipedia) -- EC actually
+    # belongs to easyJet Europe (Wikipedia's "List of airline codes (E)"),
+    # the Vienna-based EU subsidiary easyJet set up post-Brexit to keep
+    # flying intra-EU routes, which fits an LGW->KTW fare exactly.
+    "EC": "easyJet Europe",
+}
 
 
 def _load():
