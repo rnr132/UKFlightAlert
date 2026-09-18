@@ -161,17 +161,54 @@ returns "best deal today" data, the wrong shape for a route-matrix sweep).
 `prices_cheap`, the endpoint actually swept, was never checked for a
 similar field.
 
-**So the real first step here is a live check, not a design decision:**
-does `/v1/prices/cheap` carry a link (or enough — origin/destination/
-dates/flight number — to build one via Travelpayouts' documented deep-link
-tools instead)? If yes, this is mostly plumbing: thread it through
-`storage.py`'s schema, `detect.py`'s flag dict, `notify.py`'s render —
-the same shape of change as airline/flight_number just was. If no, it
-needs either switching the sweep to a link-carrying endpoint (real
-architectural cost — re-litigates `PLAN.md §2`'s endpoint choice) or
-building links by hand via
-[travelpayouts.com/programs/100/tools](https://www.travelpayouts.com/programs/100/tools).
-Verify which situation this actually is before assuming either.
+**Update 2026-09-18 — the live check is done, and there's a real, concrete
+path now, not just a fork to resolve later.**
+
+Checked live rather than assumed: a fresh `sweep.py --dry-run` call to
+`/v1/prices/cheap` (the endpoint actually swept) returns no `link` field
+and nothing booking-related — full field list on a real fare object is
+`airline`, `departure_at`, `return_at`, `expires_at`, `price`,
+`flight_number`, `duration`, `duration_to`, `duration_back`. So switching
+the sweep endpoint isn't the path (that re-litigates `PLAN.md §2`'s
+150x-call-volume decision for no real gain) — building a link by hand is.
+
+**The real mechanism, found in Travelpayouts' actual docs, not
+guessed:**
+
+1. Build a plain search URL: `https://www.aviasales.com/search/PARAMS`,
+   where `PARAMS` is `{ORIGIN}{DDMM depart}{DEST}{DDMM return}{adults}` —
+   e.g. `LGW1110KTW14101` for LGW→KTW, depart 11 Oct, return 14 Oct, 1
+   adult economy (adult count is mandatory or the link doesn't work;
+   full encoding rules — passenger class, multi-city — in
+   [Travelpayouts' "Aviasales affiliate links" article](https://support.travelpayouts.com/hc/en-us/articles/5711895629714-Aviasales-affiliate-links)).
+2. **That raw URL carries no affiliate credit on its own** — the docs are
+   explicit that a manually-built link only starts earning once it's
+   converted into a tracked partner link. The programmatic way to do that
+   conversion is a real, documented API, not just the dashboard's "create
+   link" button:
+   `POST https://api.travelpayouts.com/links/v1/create` — batches up to
+   10 URLs per call (100 calls/min per marker), takes `trs` (Project ID),
+   `marker` (partner ID), and a `links` array of `{url, sub_id}`, returns
+   `partner_url` per link. The same account-wide API token already in
+   `TRAVELPAYOUTS_TOKEN` authenticates this too — confirmed against
+   [the API doc](https://support.travelpayouts.com/hc/en-us/articles/25289759198226-API-for-Travelpayouts-partner-links),
+   not assumed from the Data API's own "one token covers everything"
+   framing in `README.md`.
+3. Thread `partner_url` through the same three places airline/
+   flight_number went: `detect.py`'s flag dict, `notify.py`'s render (a
+   "Search this fare" link under the price, fitting naturally alongside
+   the existing "worth checking live before booking" line — an honest
+   framing anyway, since a cached fare isn't guaranteed still bookable at
+   that price).
+
+**What's missing before this can actually be built and tested, not
+guessed at:** the `trs` (Project ID, subscribed to the Aviasales brand)
+and `marker` (partner ID) values — both account-specific, both need to
+come from the user's own Travelpayouts dashboard, same as every other
+account-specific value in this project (never invented, never assumed).
+Ask for both before starting. Building 10-link batches also needs
+throttling awareness matching `sweep.py`'s existing rate-limit handling,
+since this would run at nightly-sweep scale, not one link at a time.
 
 ---
 
