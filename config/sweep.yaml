@@ -126,6 +126,33 @@ monitoring:
   # problem worth flagging on every subsequent run.
   staleness_warning_hours: 36
 
+booking_links:
+  # Not secrets — trs is a Travelpayouts Project ID, marker is a Partner
+  # ID, both read straight off the dashboard (marker even shows up in
+  # Travelpayouts' own public widget snippets elsewhere on the web),
+  # unlike TRAVELPAYOUTS_TOKEN. Same "plain config, not env" treatment as
+  # notify.smtp_username/from_address above. Project "Flight Alerts" (ID
+  # 575278), channel type Website, traffic-source URL
+  # https://flightalert.rohit-nair.com — the domain this project already
+  # sends email from, the truthful thing to declare (TODO.md).
+  trs: 575278
+  marker: 771104
+  create_link_path: "/links/v1/create"
+  # Per-link tracking tag in Travelpayouts' own reporting — distinguishes
+  # these clicks from any other future use of the same account (TODO.md's
+  # "book a real trip" reminder), at zero cost.
+  sub_id: "digest"
+  # Short branded links (aviasales.tp.st/...) rather than long ones with
+  # every tracking param spelled out — cleaner in an email table that
+  # already has to fit a 375px phone width (PLAN.md's HTML digest work).
+  shorten: true
+  # Documented as 100 requests/minute *per marker* (Travelpayouts' "API
+  # for Travelpayouts partner links" doc) — a different, much higher
+  # ceiling than rate_limit.requests_per_minute above, which throttles the
+  # unrelated price-sweep endpoint. Kept as its own key rather than reused,
+  # since the two limits belong to different endpoints.
+  requests_per_minute: 100
+
 notify:
   # Weekly digest, not per-night — matches what README.md and PLAN.md
   # already committed to before a delivery mechanism was even chosen:

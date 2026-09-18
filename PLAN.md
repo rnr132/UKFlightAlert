@@ -809,3 +809,86 @@ not assumed fine from the text output — one continent name ("North
 America") wraps to a second line on the fare-card heading at that width,
 which reads fine but is worth knowing since nothing wrapped there in the
 region-grouped view (continent was never inline with anything else).
+
+## Booking links, end to end (scripts/booking_links.py, 2026-09-18)
+
+TODO.md had already found the real mechanism live (not guessed) the same
+day, before this was built: a plain search URL
+(`https://www.aviasales.com/search/{ORIGIN}{DDMM}{DEST}{DDMM}{adults}`)
+carries no affiliate credit on its own — it has to be converted via
+`POST /links/v1/create`, which takes account-specific `trs` (Project ID)
+and `marker` (Partner ID). Both were missing and, per that doc, not
+something to invent or assume.
+
+**Getting trs/marker was itself a walked-through live session, not a
+side note.** The user had a Travelpayouts account (from the existing
+`TRAVELPAYOUTS_TOKEN`) but no Project yet — `marker` (771104) was visible
+immediately in the dashboard's lower-left corner; `trs` needed a Project
+to exist first. Created live: "Flight Alerts", traffic-source URL
+`https://flightalert.rohit-nair.com` (the domain this project already
+sends email from — the truthful thing to declare, not the personal site,
+since the links go out via the digest, not a live webpage), landing on
+Project ID **575278**. Both values confirmed non-secret (marker already
+appears in Travelpayouts' own public widget snippets elsewhere), so they
+live in `config/sweep.yaml`'s new `booking_links` block as plain config,
+same treatment as `notify.smtp_username`/`from_address`.
+
+**One deliberate deviation from TODO.md's sketch.** TODO.md had proposed
+threading `partner_url` through "detect.py's flag dict" directly. Building
+it, `detect.py`'s own docstring rules that out: "Pure arithmetic ... no
+API calls" is a stated invariant, and link conversion is the one network
+call in this whole feature. Rather than break that invariant, the call
+lives in `sweep.py` instead — `booking_links.attach_booking_links()` runs
+between `detect.detect()` and `detect.write_flags()`, so the persisted
+flag dict still ends up with the link fields TODO.md wanted, but
+`detect.py` itself is completely untouched, including its own standalone
+CLI (`python scripts/detect.py --date ...`), which still makes no network
+calls at all.
+
+**Two functions, split because only one touches the network:**
+`build_search_url()` is pure string formatting (verified against the
+documented worked example — `LGW1110KTW14101` for LGW→KTW, 11→14 Oct, 1
+adult — byte for byte); `create_partner_links()` batches up to 10 URLs per
+call and throttles to 100/min *per marker* (Travelpayouts' documented
+limit for this endpoint, unrelated to and much higher than
+`rate_limit.requests_per_minute`, which throttles the price-sweep
+endpoint — kept as a separate config key rather than reused, since the
+two limits belong to different endpoints entirely).
+
+**Failure isolation, matching PATTERNS.md's "optional inputs degrade to a
+skip, never a failure":** `attach_booking_links()` never raises. Every
+flag always gets a plain `search_url` (pure, can't fail); `partner_url`
+is added only when the batched API call succeeds, and a total failure
+(bad credentials, network error, API downtime) prints a warning and
+leaves every flag with just `search_url` rather than reddening the whole
+nightly sweep over what's an enhancement on top of core price data, not
+core data collection. `notify.py`'s new `_booking_url()` prefers
+`partner_url`, falls back to `search_url`, and returns `None` for a flag
+written before this field existed (2026-09-18) — same "no field -> omit
+the line, never crash" convention `_airline_label()` already established.
+Wired into both plain-text renderers directly and into the one shared
+`_render_fare_row()` for HTML, which means the trip-length-grouped HTML
+view (still unwired into production, 2026-09-18 above) picked up the link
+for free, with no separate edit.
+
+**Verified for real, not just synthetically:** `create_partner_links()`
+called live against 3 real flagged fares (from `data/flags/2026-09-17.
+jsonl`) using the real `trs`/`marker`/`TRAVELPAYOUTS_TOKEN` — all 3
+converted successfully to real `aviasales.tpk.mx` short links. One
+followed in-browser: resolved to
+`aviasales.com/search/STN1909HER24091?marker=771104...` — the exact
+original route/dates, with the real marker attached — and rendered a
+genuine Aviasales results page with real flights and real prices, not an
+error or placeholder. Rendering checked at 375px against real recent
+flags with the 3 real partner links spliced in, plus one flag
+deliberately left without either field to force the pre-feature fallback
+path: all three states (`partner_url` present, `search_url`-only, no link
+at all) render correctly — a "Search this fare →" link under the
+airline/holiday rows when a link exists, nothing when it doesn't, no
+crash, no dangling empty row.
+
+**Not yet true of a real sent digest.** Today's sweep already ran
+(`Sweep: 2026-09-18 08:30 UTC`) before this landed, so tonight's flags
+file predates it. The earliest a real flag carries a link is tomorrow's
+sweep; the earliest a recipient actually sees one is the next Friday
+digest.

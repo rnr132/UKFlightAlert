@@ -274,6 +274,17 @@ def _airline_label(f):
     return f"{airlines.resolve(airline)} {airline}{flight_number}"
 
 
+def _booking_url(f):
+    """A clickable link to search this exact fare — the affiliate-tracked
+    partner_url when scripts/booking_links.py's API conversion succeeded,
+    falling back to the plain (non-affiliate) search_url otherwise, so a
+    recipient still gets a working link even on a night the conversion API
+    had a problem. None for a flag written before this field existed
+    (2026-09-18) — same "no field -> omit the line, never crash"
+    convention as _airline_label()."""
+    return f.get("partner_url") or f.get("search_url")
+
+
 def build_digest_text(flags, as_of, min_drop_pct, min_trip_nights=0):
     """Plain-text digest body, or None if there's nothing to say. This is
     the multipart/alternative fallback for clients/screen readers that
@@ -319,6 +330,9 @@ def build_digest_text(flags, as_of, min_drop_pct, min_trip_nights=0):
                 )
                 if f["_holiday"]:
                     lines.append(f"      ★ {_holiday_phrase(f['_holiday'])}")
+                booking_url = _booking_url(f)
+                if booking_url:
+                    lines.append(f"      Search this fare: {booking_url}")
             lines.append("")
         lines.append("")
 
@@ -377,6 +391,9 @@ def build_digest_text_by_length(flags, as_of, min_drop_pct, min_trip_nights=0):
             )
             if f["_holiday"]:
                 lines.append(f"      ★ {_holiday_phrase(f['_holiday'])}")
+            booking_url = _booking_url(f)
+            if booking_url:
+                lines.append(f"      Search this fare: {booking_url}")
             lines.append("")
         lines.append("")
 
@@ -440,7 +457,7 @@ def _render_fare_row(f, is_last):
             <td colspan="2" style="font-size:13px;color:#64748b;padding-top:4px;font-family:{_FONT_STACK};">
               {_esc(f['origin_airport'])} &middot; {_date_range_label(f['depart_date'], f['return_date'])} &middot; {nights} night{'s' if nights != 1 else ''}
             </td>
-          </tr>{_render_airline_row(f)}{_render_holiday_tag(f['_holiday'])}
+          </tr>{_render_airline_row(f)}{_render_holiday_tag(f['_holiday'])}{_render_booking_link_row(f)}
         </table>
       </td></tr>"""
 
@@ -479,6 +496,24 @@ def _render_holiday_tag(holiday):
           <tr>
             <td colspan="2" style="padding-top:6px;">
               <span style="display:inline-block;background:#f3e8ff;color:#6b21a8;font-size:11px;font-weight:700;padding:3px 9px;border-radius:999px;font-family:{_FONT_STACK};">&#127890; {_esc(_holiday_phrase(holiday))}</span>
+            </td>
+          </tr>"""
+
+
+def _render_booking_link_row(f):
+    """A text link under the fare's other detail rows so a recipient can go
+    straight from "this looks cheap" to a real search, closing the gap
+    TODO.md flagged once airline/flight number already existed. Empty
+    string when there's no link at all — a flag written before this field
+    existed (2026-09-18) — same "splice in unconditionally" convention as
+    _render_airline_row()/_render_holiday_tag()."""
+    url = _booking_url(f)
+    if not url:
+        return ""
+    return f"""
+          <tr>
+            <td colspan="2" style="padding-top:8px;">
+              <a href="{_esc(url)}" style="font-size:13px;font-weight:700;color:#1e3a8a;text-decoration:none;font-family:{_FONT_STACK};">Search this fare &rarr;</a>
             </td>
           </tr>"""
 

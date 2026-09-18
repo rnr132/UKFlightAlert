@@ -29,6 +29,7 @@ from datetime import date, datetime, timezone
 
 import requests
 
+import booking_links
 import detect
 import storage
 from config import REPO_ROOT, load_config
@@ -370,6 +371,11 @@ def real_sweep(config, origin_filter=None):
     # nothing, the same way compact/rollup are no-ops on data too young
     # to touch.
     flags = detect.detect(sweep_date, config=config)
+    # Booking-link enrichment lives here, not inside detect.py, which
+    # documents itself as making no API calls — see booking_links.py's
+    # module docstring. Never fails the run: a conversion problem degrades
+    # to plain (non-affiliate) search links, handled inside this call.
+    flags = booking_links.attach_booking_links(flags, config, token)
     flags_path = detect.write_flags(flags, sweep_date)
     print(f"detect: {len(flags)} flagged" + (f" -> {flags_path}" if flags_path else ""))
 
