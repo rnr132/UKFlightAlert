@@ -6,6 +6,20 @@ human needs to actually go *do*, independent of any single phase.
 
 ---
 
+## Watch the first few real nights of Weekend/Holiday Deals (2026-09-19)
+
+The pivot to two hyper-specialized products, nightly delivery, is built
+and verified read-only (full record in `PLAN.md`) but has not yet run
+for real — the next scheduled or `workflow_dispatch` sweep is the first
+genuine test. Worth a deliberate look at the first couple of real
+sends: does nightly volume stay sane (the small real sample this
+session suggested ~2/night weekend, well under 1/night holiday, but
+that's 4 nights of data, not a real baseline), does the two-section
+email read well on an actual phone inbox rather than the browser
+preview, and does anything in `data/notify_heartbeat.jsonl` look off.
+
+---
+
 ## Book at least one real trip through Travelpayouts/Aviasales
 
 **Why this matters:** Travelpayouts gives Data API access for free because

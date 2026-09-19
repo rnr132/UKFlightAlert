@@ -105,19 +105,13 @@ detection:
   # (not the stored data/flags/*.jsonl files), so the change takes effect
   # on the existing record immediately, not just on new flags.
   drop_pct_threshold: 0.30
-  # Minimum trip length in nights (return_date - depart_date). Same-day
-  # and next-day round trips aren't leisure fares — usually a data quirk
-  # or a positioning fare — so they don't get flagged. notify.py filters
-  # the digest to the same rule, so it reshapes the existing record too.
-  #
-  # One named exception, added 2026-09-17: a literal Saturday-to-Sunday
-  # 1-night trip clears this floor even though it's below it — a real
-  # weekend getaway, not the "probably a data quirk" case the floor
-  # exists to catch. See detect.is_eligible_trip_length(), the one place
-  # this rule (floor + exception) actually lives — detect.py and
-  # notify.py both call it, so this value only sets the floor; the
-  # exception itself isn't config-driven.
-  min_trip_nights: 2
+  # min_trip_nights (a generic 2-night floor with a Sat-Sun exception)
+  # retired 2026-09-19: replaced by two hyper-specialized products
+  # instead of one general-shape rule — see detect.PRODUCTS
+  # (is_weekend_trip / is_during_holiday). Shared here rather than
+  # per-product for now (both read drop_pct_threshold/min_observations
+  # above); revisit only once real volume from both suggests they need
+  # different bars.
 
 monitoring:
   # If the newest heartbeat is older than this when a run starts, print a
@@ -154,22 +148,16 @@ booking_links:
   requests_per_minute: 100
 
 notify:
-  # Weekly digest, not per-night — matches what README.md and PLAN.md
-  # already committed to before a delivery mechanism was even chosen:
-  # "weekly signal, not real-time alert, no urgency language."
-  #
-  # Moved Sunday -> Friday on 2026-09-17: deliberately so a recipient
-  # reads it with the weekend still ahead to decide, rather than reading
-  # it as the weekend is ending. No longer the same day as
-  # far_sweep_weekday above (Sunday) — the two were originally kept in
-  # sync "for one predictable weekly rhythm... rather than two different
-  # cadences to track", a cognitive-load argument with no functional
-  # coupling (far_sweep_weekday only decides which night also sweeps the
-  # far tier; nothing about it depends on when the digest fires). Left
-  # far_sweep_weekday alone rather than moving it too, since only the
-  # digest day was asked for — flagging the divergence here rather than
-  # silently reintroducing "two cadences to track" without saying so.
-  digest_weekday: 4  # Friday
+  # Nightly, not weekly (2026-09-19 — digest_weekday retired). The old
+  # weekly cadence ("weekly signal, not real-time alert") was designed
+  # around a generic route-is-cheap-for-the-season alert; a weekend-trip
+  # deal is inherently short-lead-time, and batching it for up to six
+  # days before sending ate directly into the window that's the whole
+  # premise of that product. This doesn't change the underlying data's
+  # staleness (still a 2-7-day-old cache, same as always) — it just stops
+  # adding avoidable delivery lag on top of that. notify.py now runs
+  # every night and sends only when either product has something new;
+  # see its module docstring.
   # Resend (transactional email, free tier) — switched from the
   # Gmail/Yahoo consumer-webmail search on 2026-09-17. Those providers
   # anti-abuse-gate *account creation* (Gmail rate-limited new accounts)

@@ -892,3 +892,169 @@ crash, no dangling empty row.
 file predates it. The earliest a real flag carries a link is tomorrow's
 sweep; the earliest a recipient actually sees one is the next Friday
 digest.
+
+## Correction: `expires_at` is not a per-fare freshness signal (2026-09-19)
+
+Raised while discussing whether the digest could ever get fresher data:
+this file's own §4 originally called `expires_at` "the closest real
+signal to staleness the response provides" — the API's estimate of how
+long *that specific cached price* is still good for. Checked directly
+against real data before building anything on top of that claim (not
+assumed correct because it was already written down): across four real
+delta files (2026-09-16 through -19, ~8,000 rows total),
+`expires_at - observed_at` is **1.000-1.022 hours for every single row**,
+with no variance beyond clock jitter. That's not a per-fare cache-age
+signal — it's a flat, generic "this API response is valid for an hour"
+TTL stamped identically onto every ticket regardless of route, price, or
+how long the underlying fare has actually been cached.
+
+**Consequence: no `expires_at`-based freshness gate was built.** In this
+project's nightly-cadence pipeline, `detect.py` and `notify.py` both run
+within minutes of the sweep that produced the data — always comfortably
+inside that 1-hour window. A gate checking "has `expires_at` already
+passed" would never fire, on any row, ever; shipping it would be dead
+code dressed up as a safety feature. The honest answer, unchanged from
+the live doc check earlier the same day: nothing in Travelpayouts' free
+tier exposes genuine per-fare freshness, and there's no way around that
+within the zero-cost constraint. The real, working lever stays what it
+already was — minimizing this pipeline's own added delivery lag, which
+the nightly-cadence pivot below already does.
+
+## Hyperspecializing into two products: Weekend Deals and Holiday Deals (2026-09-19)
+
+Requested directly, with the reasoning stated up front: almost nobody can
+act on a random mid-week, random-length fare found on short notice — the
+"very few people can fly to Zimbabwe on a week's notice because a random
+set of days happened to be available" case. Rather than a general "2+
+nights, any shape" detector with a couple of named exceptions bolted on,
+the system now flags *only* the two trip shapes a normal person can
+actually act on: a spontaneous weekend, or a trip during a school
+holiday that's booked months ahead anyway. This replaces the old rule
+entirely — it is not an additional filter layered on top, and a 2-night
+midweek trip that used to qualify no longer does.
+
+**detect.py: `is_weekend_trip()` and `is_during_holiday()` replace
+`is_eligible_trip_length()`.** The old function (a floor plus a
+Saturday-to-Sunday exception, 2026-09-17) is deleted outright rather than
+kept unused — its whole shape doesn't generalize to two independent
+products.
+
+- `is_weekend_trip(depart_date, return_date)`: true only for
+  Friday→Sunday, Saturday→Monday, or Saturday→Sunday — checked against
+  both the day-of-week *pair* and the actual night count together, not
+  the pair alone. A Friday departure and a Sunday return three weeks
+  later share the same weekday pair as a genuine weekend trip but isn't
+  one; missing this would have been a real, silent false-positive bug.
+  Caught before shipping, not after: verified against 9 hand-built cases
+  including that exact trap, all passing.
+- `is_during_holiday(depart_date, return_date)`: true only for the
+  strict "during" relation from `school_holidays.nearby()` — not its
+  ±2-day before/after tolerance, which exists for a different job
+  (tagging a fare as "just before" a holiday on a digest, a bonus
+  factoid). A dedicated holiday-alerter means what it says. No trip-length
+  floor — a holiday trip is reasonably 3 days or 3 weeks. Verified
+  against 7 hand-built cases against the real October half-term window,
+  including the two "just outside during, inside tolerance" boundary
+  cases that must NOT match.
+
+**Both products track flagging state independently, not through one
+shared column.** The same fare can legitimately clear both bars at once
+— a Saturday flight during half-term is both a weekend trip and a
+holiday trip — and flagging it for one must not block the other from
+ever flagging it. `storage.py`'s single `flagged_min_price` column
+became two, `flagged_min_price_weekend` and `flagged_min_price_holiday`
+(`storage.FLAGGED_PRICE_COLUMNS`), both starting fresh at NaN for every
+existing index row — the old column's values belonged to the now-retired
+general detector and don't semantically carry over to either new
+product, so they're not migrated, just left out of `INDEX_COLUMNS` going
+forward (dropped from the file on the next `save_index()`, not
+backfilled). `filter_changed()`'s carry-forward loop (the fix for the
+2026-09-05 "flagged_min_price silently reset by an unrelated ingest"
+bug) now loops over both columns, since the same risk applies to each
+independently. Verified directly with a synthetic two-flag scenario
+(flag under "weekend", confirm "holiday" untouched; then flag under
+"holiday" too, confirm "weekend" survives unchanged) before trusting the
+real replay below.
+
+**`detect()` takes a `product` argument** (`detect.PRODUCTS`, a
+name → predicate dict — the one place both products are defined, so
+`sweep.py`/`notify.py` iterate it rather than hard-coding two names
+twice each) and writes to `data/flags/<product>/YYYY-MM-DD.jsonl`
+instead of one shared `data/flags/`. `sweep.py`'s `real_sweep()` now
+calls `detect.detect()` once per product, attaches booking links to each
+independently, and records a per-product breakdown
+(`flags_found_by_product`) in the heartbeat alongside the existing total.
+
+**notify.py: nightly, not weekly, and two sections in one email, not two
+separate sends.** Cadence reasoning: the old "weekly signal, not
+real-time alert" framing fit a generic route-is-cheap-for-the-season
+alert; a weekend-trip deal is inherently short-lead-time, and batching it
+up to six days before sending ate directly into the window that's the
+whole premise of that product. This doesn't touch the data's own
+staleness (still the same 2-7-day-old cache, confirmed unchanged above)
+— it only removes delivery lag this pipeline was adding on top of that
+for no reason. `notify.digest_weekday` and the whole
+`is_digest_day`/`--force` mechanism are deleted; `run()` now always
+attempts and skips silently only when *neither* product has anything
+clearing the bar that night — same "empty result is valid" convention
+as everything else, just with the weekday condition removed rather than
+bypassed.
+
+Delivery shape: **one email, two sections**, not two separate sends or
+independent per-product subscriptions. Chosen because today there is
+exactly one shared `NOTIFY_RECIPIENTS` list with no per-user preferences
+at all (Brief.md deferred that from day one); true independent
+subscriptions would mean building that infrastructure now, which nobody
+asked for. One combined email needs nothing new and is easy to split
+later without touching any detection logic, since the two products
+already write to fully separate files.
+
+`_load_recent_flags()`'s old 7-day rolling window is gone — nightly
+delivery means "new since last night" *is* "tonight", so
+`_load_tonight_flags(as_of, product)` reads exactly one file. A wider
+window was considered and rejected: it would have reintroduced the
+"same flag shown again the next day" problem the old system never fully
+solved either, since nothing tracks "already sent" separately from
+"within the window". A missed night is replayed by hand via
+`workflow_dispatch` instead — the same established pattern this project
+already relies on for a missed sweep (PATTERNS.md), not new machinery.
+
+**Rendering:** the region → destination card layout (`_render_continent_section`,
+`_render_destination_card`, `_render_fare_row` and everything under it)
+is unchanged and reused for both products' sections — it was never tied
+to the old eligibility rule, only to an already-filtered fare list. What's
+deleted outright: `_prepare_digest_by_length`, `build_digest_text_by_length`,
+`build_digest_html_by_length`, `_length_bucket`, `_LENGTH_BUCKETS`,
+`_render_fare_card_by_length`, `_render_length_section` — the
+trip-length-grouped alternate view built 2026-09-18 to compare against
+region-grouping. That comparison is moot once weekend trips are
+uniformly short and holiday trips don't need that axis either; keeping
+it as unused dead code once its whole reason for existing was superseded
+would have contradicted how every other retired piece in this project
+has been handled (deleted, not commented out — see `grouped_prices` in
+`sweep.py`, `is_eligible_trip_length` above).
+
+**Verified before trusting any of this:** both new predicates against 16
+combined hand-built cases (above); the independent-flagging-state fix
+synthetically; then a real, read-only replay of `detect()` across the
+four real delta nights still on disk (2026-09-16 through -19,
+`storage.save_index` patched to a no-op, the same technique already
+established in this project's 2026-09-17 min_trip_nights work) —
+8 weekend flags and 1 holiday flag, all genuinely correct shapes
+(`LGW→MAN` Sat→Sun, `LGW→CWL`/`LTN→CWL`/`LHR→CWL` all Fri→Sun,
+`LCY→CMN` genuinely overlapping October half-term). The combined digest
+was then rendered from those real flags (not synthetic) end to end in
+both text and HTML, and browser-checked at 375px: both section headers,
+the divider between them, the region/destination cards, the holiday tag
+inside the Holiday Deals section, and the footer's updated "nightly
+signal" wording all render correctly with no overflow.
+
+**Not yet true of a real production run.** Everything above was verified
+read-only, deliberately — writing real flags or mutating the real index
+outside the automated pipeline would produce a bot-attributed commit
+under a human/assistant hand, breaking PATTERNS.md's "single bot
+identity" convention for `data/` changes. The first genuine run is
+whichever real sweep — scheduled or `workflow_dispatch` — happens next;
+worth a deliberate look at the first couple of real nights once it does,
+the same way the Resend rollout got a deliberate look before trusting it
+at scale.

@@ -46,13 +46,14 @@ jobs:
           TRAVELPAYOUTS_TOKEN: ${{ secrets.TRAVELPAYOUTS_TOKEN }}
         run: python scripts/sweep.py
 
-      - name: Send weekly digest
-        # No flags: notify.py checks notify.digest_weekday itself and
-        # skips cleanly (exit 0) on every other night — see its own
-        # day-of-week gate. Runs before the commit step below, not after,
-        # so its heartbeat line (data/notify_heartbeat.jsonl) lands in the
-        # same nightly commit as everything else, matching how sweep.py's
-        # own heartbeat/compact/rollup all happen before the one commit
+      - name: Send nightly digest
+        # Runs every night now (2026-09-19 — no more weekday gate; see
+        # notify.py's module docstring), skipping cleanly (exit 0) on a
+        # night neither product has anything clearing the bar. Runs
+        # before the commit step below, not after, so its heartbeat line
+        # (data/notify_heartbeat.jsonl) lands in the same nightly commit
+        # as everything else, matching how sweep.py's own
+        # heartbeat/compact/rollup all happen before the one commit
         # rather than needing a second one.
         #
         # Deliberately NOT continue-on-error: a real send failure (bad

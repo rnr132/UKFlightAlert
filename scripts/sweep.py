@@ -369,15 +369,22 @@ def real_sweep(config, origin_filter=None):
     # Safe to run every night unconditionally — on data too young to have
     # any route past the observation-count gate yet, this just finds
     # nothing, the same way compact/rollup are no-ops on data too young
-    # to touch.
-    flags = detect.detect(sweep_date, config=config)
-    # Booking-link enrichment lives here, not inside detect.py, which
-    # documents itself as making no API calls — see booking_links.py's
-    # module docstring. Never fails the run: a conversion problem degrades
-    # to plain (non-affiliate) search links, handled inside this call.
-    flags = booking_links.attach_booking_links(flags, config, token)
-    flags_path = detect.write_flags(flags, sweep_date)
-    print(f"detect: {len(flags)} flagged" + (f" -> {flags_path}" if flags_path else ""))
+    # to touch. Two products (detect.PRODUCTS, 2026-09-19 pivot), each
+    # with its own eligibility rule and its own flags file — see
+    # detect.py's module docstring for why one general detector became two
+    # hyper-specialized ones.
+    flags_by_product = {}
+    for product in sorted(detect.PRODUCTS):
+        flags = detect.detect(sweep_date, product, config=config)
+        # Booking-link enrichment lives here, not inside detect.py, which
+        # documents itself as making no API calls — see booking_links.py's
+        # module docstring. Never fails the run: a conversion problem
+        # degrades to plain (non-affiliate) search links, handled inside
+        # this call.
+        flags = booking_links.attach_booking_links(flags, config, token)
+        flags_path = detect.write_flags(flags, sweep_date, product)
+        print(f"detect[{product}]: {len(flags)} flagged" + (f" -> {flags_path}" if flags_path else ""))
+        flags_by_product[product] = flags
 
     failures = [r for r in results if not r["ok"]]
     cheapest = min(
@@ -398,7 +405,8 @@ def real_sweep(config, origin_filter=None):
         "cheapest": cheapest,
         "compact": compact_result,
         "rollup": rollup_result,
-        "flags_found": len(flags),
+        "flags_found": sum(len(f) for f in flags_by_product.values()),
+        "flags_found_by_product": {p: len(f) for p, f in flags_by_product.items()},
     }
     append_heartbeat(heartbeat)
 

@@ -56,13 +56,19 @@ ROW_COLUMNS = KEY_COLUMNS + [
     "observed_at",
     "price_hash",
 ]
+# One flagged_min_price column per detect.py product (2026-09-19 pivot —
+# see detect.PRODUCTS), not one shared column. The two products' flagging
+# state has to be independent: the same fare can legitimately qualify for
+# both at once (a Saturday flight during half-term is both a weekend trip
+# and a holiday trip), and a single shared column would let flagging it
+# for one product silently block the other from ever flagging it.
+FLAGGED_PRICE_COLUMNS = ["flagged_min_price_weekend", "flagged_min_price_holiday"]
 INDEX_COLUMNS = KEY_COLUMNS + [
     "price_hash",
     "observation_count",
     "first_seen",
     "last_seen",
-    "flagged_min_price",
-]
+] + FLAGGED_PRICE_COLUMNS
 
 
 def _today_utc():
@@ -167,7 +173,8 @@ def load_index():
         empty["observation_count"] = empty["observation_count"].astype("int64")
         empty["first_seen"] = _empty_timestamp_series(empty.index)
         empty["last_seen"] = _empty_timestamp_series(empty.index)
-        empty["flagged_min_price"] = empty["flagged_min_price"].astype("float64")
+        for col in FLAGGED_PRICE_COLUMNS:
+            empty[col] = empty[col].astype("float64")
         return empty
 
     index_df = pd.read_parquet(INDEX_PATH)
@@ -185,13 +192,16 @@ def load_index():
         index_df["first_seen"] = _empty_timestamp_series(index_df.index)
     if "last_seen" not in index_df.columns:
         index_df["last_seen"] = _empty_timestamp_series(index_df.index)
-    if "flagged_min_price" not in index_df.columns:
-        # NaN = never flagged. Real production data already has flags on
-        # record from before this column existed — see the one-time
-        # backfill in migrate_flagged_min_price(), run once separately,
-        # rather than reconstructed silently on every load here. A fresh
-        # index correctly starts everyone at "never flagged."
-        index_df["flagged_min_price"] = float("nan")
+    # NaN = never flagged (by this product). The old single flagged_min_price
+    # column (pre-2026-09-19) tracked a now-retired general-purpose
+    # detector with a different eligibility rule entirely — its values
+    # don't semantically carry over to either new product, so both start
+    # fresh at NaN for every existing row rather than inheriting it, and
+    # the old column is simply left out of INDEX_COLUMNS going forward
+    # (dropped from the file on the next save_index(), not migrated).
+    for col in FLAGGED_PRICE_COLUMNS:
+        if col not in index_df.columns:
+            index_df[col] = float("nan")
     return index_df
 
 
@@ -218,7 +228,8 @@ def filter_changed(rows_df, index_df):
     merged = rows_df.merge(
         index_df[
             KEY_COLUMNS
-            + ["price_hash", "observation_count", "first_seen", "last_seen", "flagged_min_price"]
+            + ["price_hash", "observation_count", "first_seen", "last_seen"]
+            + FLAGGED_PRICE_COLUMNS
         ],
         on=KEY_COLUMNS,
         how="left",
@@ -258,13 +269,17 @@ def filter_changed(rows_df, index_df):
     ]
     updated_rows["last_seen"] = updated_rows["observed_at"]
     # Carry forward, don't touch — this rebuild exists for the observation
-    # bookkeeping above, and flagged_min_price is detect.py's business, not
-    # this function's. Missing this the first time around silently reset
-    # every touched key's flagged_min_price to NaN on its very next sweep,
-    # undoing the "must beat the last flag" fix the moment it needed to
-    # hold — found immediately by re-verifying on real infrastructure
-    # rather than assuming the fix worked from the unit tests alone.
-    updated_rows["flagged_min_price"] = merged["flagged_min_price"]
+    # bookkeeping above, and the flagged_min_price_* columns are detect.py's
+    # business, not this function's. Missing this the first time around
+    # (pre-2026-09-19, back when there was only one such column) silently
+    # reset every touched key's flagged price to NaN on its very next
+    # sweep, undoing the "must beat the last flag" fix the moment it
+    # needed to hold — found immediately by re-verifying on real
+    # infrastructure rather than assuming the fix worked from the unit
+    # tests alone. Same risk applies to both columns now, so both get the
+    # same explicit carry-forward.
+    for col in FLAGGED_PRICE_COLUMNS:
+        updated_rows[col] = merged[col]
     updated_rows = updated_rows.drop(columns=["observed_at"])
 
     untouched = index_df[

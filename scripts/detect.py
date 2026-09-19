@@ -5,15 +5,29 @@ Flight Deal Scanner — deal detection (Phase 2).
 Pure arithmetic over data already collected by the sweep — no API calls,
 no LLM calls, matching the brief's explicit constraint from Phase 1.
 
-For every flight whose price changed *tonight*, checks whether tonight's
-price is both a genuine new low for that flight and meaningfully below
-its own recent typical price — AND strictly better than the last price
-this exact flight was already flagged at, so a fare that merely holds at
-its own record low (e.g. a different flight number now selling the same
-price) doesn't re-flag every night it happens to be re-observed. Flags
-are written to data/flags/YYYY-MM-DD.jsonl. Nothing gets sent anywhere —
-this step only finds and records candidates; delivery is a separate,
-later phase.
+Two hyper-specialized products, not one general-purpose detector
+(2026-09-19 pivot — replaces the old "2+ nights, any shape" rule
+entirely, not additively). The reasoning: almost nobody can actually act
+on a random mid-week, random-length fare found on short notice, so the
+system should only ever flag the two shapes a normal person really can —
+a spontaneous weekend, or a trip during a school holiday that's booked
+months ahead anyway. See PRODUCTS below for the two eligibility rules.
+
+For every flight whose price changed *tonight*, per product: checks
+whether tonight's price is both a genuine new low for that flight and
+meaningfully below its own recent typical price — AND strictly better
+than the last price this exact flight was already flagged at *for that
+product*, so a fare that merely holds at its own record low (e.g. a
+different flight number now selling the same price) doesn't re-flag
+every night it happens to be re-observed. The two products track this
+independently (storage.py's flagged_min_price_<product> columns) since
+the same fare can legitimately qualify for both at once — a Saturday
+flight during half-term is both a weekend trip and a holiday trip, and
+flagging it for one shouldn't block the other from ever flagging it.
+
+Flags are written to data/flags/<product>/YYYY-MM-DD.jsonl. Nothing gets
+sent anywhere — this step only finds and records candidates; delivery is
+notify.py.
 
 Why only tonight's changed rows get evaluated, not the full history every
 night: a flight whose price hasn't moved since it was last checked can't
@@ -23,8 +37,9 @@ against the brief's "the eventual percentile-scoring step is a cheap
 query" design goal.
 
 Usage:
-    python scripts/detect.py                    # tonight's date (UTC)
-    python scripts/detect.py --date 2026-09-15   # a specific past date
+    python scripts/detect.py                       # both products, tonight (UTC)
+    python scripts/detect.py --product weekend      # one product only
+    python scripts/detect.py --date 2026-09-15      # a specific past date
 """
 import argparse
 import json
@@ -32,6 +47,7 @@ from datetime import date
 
 import pandas as pd
 
+import school_holidays
 import storage
 from config import load_config
 
@@ -46,41 +62,77 @@ def _as_date_str(value):
     return str(value.date()) if hasattr(value, "date") else str(value)
 
 
-def is_eligible_trip_length(depart_date, return_date, min_trip_nights):
-    """Trip-length gate, shared with notify.py's digest filter so the two
-    can never disagree about which fares qualify (same principle as
-    notify.py's own _prepare_digest()).
+_WEEKEND_SHAPES = {
+    (4, 6): 2,  # Friday -> Sunday
+    (5, 0): 2,  # Saturday -> Monday
+    (5, 6): 1,  # Saturday -> Sunday
+}
 
-    A plain nights floor, with one named exception (2026-09-17): a literal
-    Saturday-to-Sunday 1-night trip is let through even below the floor.
-    Everything else under the floor stays excluded, min_trip_nights==2's
-    original reasoning unchanged — a random 1-night round trip is usually
-    a data quirk or a positioning fare, not a leisure booking. A real
-    weekend getaway is the one 1-night shape that's genuinely a leisure
-    trip, so it gets a narrow, specific carve-out rather than lowering the
-    floor for every 1-night trip.
 
-    Takes real date-like objects (anything with .weekday() — a
-    datetime.date, a datetime.datetime, or a pandas Timestamp all work);
-    callers convert from whatever their own source representation is."""
+def is_weekend_trip(depart_date, return_date):
+    """True only for a Friday->Sunday, Saturday->Monday, or
+    Saturday->Sunday trip — the three shapes someone can plausibly book on
+    short notice without pre-arranged leave. Replaces the old generic
+    "2+ nights, any shape" floor and its Sat-Sun exception entirely
+    (2026-09-19) — a 2-night midweek trip that used to qualify no longer
+    does; this product isn't a superset of the old rule.
+
+    Checks the actual night count against the day-of-week pair, not just
+    the pair alone — a Friday departure and a Sunday return three weeks
+    later share the same weekday pair as a genuine weekend trip but isn't
+    one, so the shape has to match a specific number of nights too.
+
+    Mon=0 ... Sun=6. Takes real date-like objects (anything with
+    .weekday() — a datetime.date, a datetime.datetime, or a pandas
+    Timestamp all work); callers convert from their own representation."""
     nights = (return_date - depart_date).days
-    if nights >= min_trip_nights:
-        return True
-    # Mon=0 ... Sat=5, Sun=6. Checking both days (not just "depart is
-    # Saturday") is redundant when nights==1 -- a 1-night trip departing
-    # Saturday can only return Sunday -- but it keeps the actual intent
-    # ("Saturday to Sunday", not just "starts on a Saturday") explicit
-    # here rather than relying on that arithmetic fact staying true.
-    return nights == 1 and depart_date.weekday() == 5 and return_date.weekday() == 6
+    shape = (depart_date.weekday(), return_date.weekday())
+    return _WEEKEND_SHAPES.get(shape) == nights
 
 
-def detect(sweep_date, config=None):
-    """Return a list of flagged-deal dicts for the given sweep date.
-    Read-only — see write_flags() for persisting the result."""
+def is_during_holiday(depart_date, return_date):
+    """True only when the trip genuinely overlaps a school holiday window
+    — the strict "during" relation from school_holidays.nearby(), not its
+    +/-2-day before/after tolerance. That tolerance exists for a
+    different job (tagging a fare on a digest as "just before" or "just
+    after" a holiday, a bonus factoid); a dedicated holiday-alerter
+    product means what it says — during, not near. No trip-length floor
+    either: a holiday trip is reasonably anywhere from a few days to a
+    few weeks.
+
+    Takes real date-like objects, matching is_weekend_trip()'s
+    convention. school_holidays.nearby() itself wants ISO strings (it's
+    built to read flags already loaded from JSON) — converted here rather
+    than changing that function's contract, since its other caller
+    (notify.py's tag rendering) still wants the full during/before/after
+    distinction, unchanged."""
+    result = school_holidays.nearby(
+        {"depart_date": _as_date_str(depart_date), "return_date": _as_date_str(return_date)}
+    )
+    return result is not None and result[1] == "during"
+
+
+# name -> eligibility predicate. The one place both products are defined;
+# sweep.py and notify.py iterate this rather than hard-coding the two
+# names twice each.
+PRODUCTS = {
+    "weekend": is_weekend_trip,
+    "holiday": is_during_holiday,
+}
+
+
+def detect(sweep_date, product, config=None):
+    """Return a list of flagged-deal dicts for the given sweep date and
+    product ("weekend" or "holiday" — see PRODUCTS). Read-only — see
+    write_flags() for persisting the result."""
+    if product not in PRODUCTS:
+        raise ValueError(f"unknown product {product!r}, expected one of {sorted(PRODUCTS)}")
+    is_eligible = PRODUCTS[product]
+    flagged_col = f"flagged_min_price_{product}"
+
     config = config or load_config()
     min_observations = config["detection"]["min_observations"]
     drop_pct_threshold = config["detection"]["drop_pct_threshold"]
-    min_trip_nights = config["detection"].get("min_trip_nights", 0)
 
     delta_path = storage.DELTA_DIR / f"{sweep_date.isoformat()}.parquet"
     if not delta_path.exists():
@@ -114,10 +166,7 @@ def detect(sweep_date, config=None):
             if obs_count < min_observations:
                 continue
 
-            # Skip trips shorter than min_trip_nights, with a Sat-Sun
-            # exception — see is_eligible_trip_length(). return_date is
-            # always present while trip_type is round-trip only.
-            if not is_eligible_trip_length(row["depart_date"], row["return_date"], min_trip_nights):
+            if not is_eligible(row["depart_date"], row["return_date"]):
                 continue
 
             if key not in history.index:
@@ -134,13 +183,14 @@ def detect(sweep_date, config=None):
             is_new_low = tonight_price <= baseline_min
             is_meaningfully_below = tonight_price <= baseline_median * (1 - drop_pct_threshold)
 
-            # Must beat this exact flight's own last flagged price, not
-            # merely tie it — otherwise a fare that just holds at its
-            # record low (e.g. a different flight number now selling the
-            # same price, which still counts as "changed" for storage
-            # purposes) re-flags every night it's re-observed. NaN means
-            # never flagged before, so anything eligible clears this.
-            flagged_min_price = index_lookup.loc[key, "flagged_min_price"]
+            # Must beat this exact flight's own last flagged price for
+            # *this product*, not merely tie it — otherwise a fare that
+            # just holds at its record low (e.g. a different flight
+            # number now selling the same price, which still counts as
+            # "changed" for storage purposes) re-flags every night it's
+            # re-observed. NaN means never flagged before by this
+            # product, so anything eligible clears this.
+            flagged_min_price = index_lookup.loc[key, flagged_col]
             if isinstance(flagged_min_price, pd.Series):
                 flagged_min_price = flagged_min_price.iloc[0]
             already_flagged_this_low = pd.notna(flagged_min_price) and tonight_price >= flagged_min_price
@@ -148,6 +198,7 @@ def detect(sweep_date, config=None):
             if is_new_low and is_meaningfully_below and not already_flagged_this_low:
                 flags.append(
                     {
+                        "product": product,
                         "flagged_at": sweep_date.isoformat(),
                         "origin_airport": row["origin_airport"],
                         "destination": row["destination"],
@@ -159,11 +210,6 @@ def detect(sweep_date, config=None):
                         "prior_median_gbp": float(baseline_median),
                         "drop_pct_vs_median": round(1 - (tonight_price / baseline_median), 3),
                         "observation_count": int(obs_count),
-                        # Added 2026-09-17 so notify.py can show who's
-                        # selling the fare, not just the route and price —
-                        # both already exist on every row (they're part of
-                        # _price_hash()'s key), just weren't copied into
-                        # the flag record before now.
                         "airline": row["airline"],
                         "flight_number": row["flight_number"],
                     }
@@ -171,18 +217,19 @@ def detect(sweep_date, config=None):
                 newly_flagged[key] = tonight_price
 
     if newly_flagged:
-        _record_flagged_prices(index_df, newly_flagged)
+        _record_flagged_prices(index_df, newly_flagged, flagged_col)
         storage.save_index(index_df)
 
     return flags
 
 
-def _record_flagged_prices(index_df, newly_flagged):
-    """Mutate index_df in place: stamp flagged_min_price for every key
-    that just flagged, so a future night only re-flags this exact flight
-    if it beats that price. A boolean mask per key rather than a MultiIndex
-    .loc assignment — simpler and avoids another dtype-alignment surprise
-    on top of the tz one already found the hard way in storage.py.
+def _record_flagged_prices(index_df, newly_flagged, flagged_col):
+    """Mutate index_df in place: stamp flagged_col for every key that just
+    flagged (under this product), so a future night only re-flags this
+    exact flight, for this same product, if it beats that price. A
+    boolean mask per key rather than a MultiIndex .loc assignment —
+    simpler and avoids another dtype-alignment surprise on top of the tz
+    one already found the hard way in storage.py.
 
     Note: relies on exact equality across KEY_COLUMNS, including
     return_date — fine while trip_type is round-trip only (PLAN.md §3),
@@ -193,17 +240,19 @@ def _record_flagged_prices(index_df, newly_flagged):
         mask = pd.Series(True, index=index_df.index)
         for col, value in zip(storage.KEY_COLUMNS, key):
             mask &= index_df[col] == value
-        index_df.loc[mask, "flagged_min_price"] = price
+        index_df.loc[mask, flagged_col] = price
 
 
-def write_flags(flags, sweep_date):
-    """Write tonight's flags to a dated file — only if there are any.
-    An empty result is valid and shouldn't create an empty file, matching
-    write_delta()'s same convention (PATTERNS.md §7)."""
+def write_flags(flags, sweep_date, product):
+    """Write tonight's flags for this product to a dated file under its
+    own product subdirectory — only if there are any. An empty result is
+    valid and shouldn't create an empty file, matching write_delta()'s
+    same convention (PATTERNS.md §7)."""
     if not flags:
         return None
-    FLAGS_DIR.mkdir(parents=True, exist_ok=True)
-    path = FLAGS_DIR / f"{sweep_date.isoformat()}.jsonl"
+    product_dir = FLAGS_DIR / product
+    product_dir.mkdir(parents=True, exist_ok=True)
+    path = product_dir / f"{sweep_date.isoformat()}.jsonl"
     with open(path, "a") as f:
         for flag in flags:
             f.write(json.dumps(flag) + "\n")
@@ -215,22 +264,30 @@ def main():
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument("--date", help="YYYY-MM-DD to evaluate. Defaults to today (UTC).")
+    parser.add_argument(
+        "--product",
+        choices=sorted(PRODUCTS),
+        help="Restrict to one product. Defaults to both.",
+    )
     args = parser.parse_args()
 
     sweep_date = date.fromisoformat(args.date) if args.date else storage._today_utc()
-    flags = detect(sweep_date)
-    path = write_flags(flags, sweep_date)
+    products = [args.product] if args.product else sorted(PRODUCTS)
 
-    print(f"detect({sweep_date}): {len(flags)} flagged")
-    for flag in flags:
-        print(
-            f"  {flag['origin_airport']}->{flag['destination']} {flag['depart_date']}: "
-            f"£{flag['price_gbp']:.0f} (typically £{flag['prior_median_gbp']:.0f}, "
-            f"{flag['drop_pct_vs_median'] * 100:.0f}% below, "
-            f"{flag['observation_count']} nights observed)"
-        )
-    if path:
-        print(f"written: {path}")
+    for product in products:
+        flags = detect(sweep_date, product)
+        path = write_flags(flags, sweep_date, product)
+
+        print(f"detect[{product}]({sweep_date}): {len(flags)} flagged")
+        for flag in flags:
+            print(
+                f"  {flag['origin_airport']}->{flag['destination']} {flag['depart_date']}: "
+                f"£{flag['price_gbp']:.0f} (typically £{flag['prior_median_gbp']:.0f}, "
+                f"{flag['drop_pct_vs_median'] * 100:.0f}% below, "
+                f"{flag['observation_count']} nights observed)"
+            )
+        if path:
+            print(f"  written: {path}")
 
 
 if __name__ == "__main__":
