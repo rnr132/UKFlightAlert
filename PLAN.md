@@ -947,15 +947,30 @@ products.
   one; missing this would have been a real, silent false-positive bug.
   Caught before shipping, not after: verified against 9 hand-built cases
   including that exact trap, all passing.
-- `is_during_holiday(depart_date, return_date)`: true only for the
-  strict "during" relation from `school_holidays.nearby()` — not its
-  ±2-day before/after tolerance, which exists for a different job
-  (tagging a fare as "just before" a holiday on a digest, a bonus
-  factoid). A dedicated holiday-alerter means what it says. No trip-length
-  floor — a holiday trip is reasonably 3 days or 3 weeks. Verified
-  against 7 hand-built cases against the real October half-term window,
-  including the two "just outside during, inside tolerance" boundary
-  cases that must NOT match.
+- `is_holiday_trip(depart_date, return_date)`: originally shipped
+  2026-09-19 as strict "during" only, not `school_holidays.nearby()`'s
+  ±2-day before/after tolerance — reasoning at the time: "a dedicated
+  holiday-alerter means what it says." **Revised the next day
+  (2026-09-20), requested directly:** some people would happily take a
+  couple of days of annual leave on either side of a holiday for a
+  cheaper fare, so "before"/"after" (still bounded by the same 2-day
+  tolerance, not opened further) now count too — renamed from
+  `is_during_holiday` since "during" was no longer accurate. Function
+  body shrank to `result is not None`, the same `school_holidays.nearby()`
+  call now accepting every relation it can return rather than filtering
+  to one. `notify.py`'s recipient-facing copy updated to match ("during,
+  or within a couple of days of"). No trip-length floor either way — a
+  holiday trip is reasonably 3 days or 3 weeks. Verified against 8
+  hand-built cases against the real October half-term window: the two
+  boundary cases that had to fail under the old rule (2 days before/after)
+  now correctly pass, and a 3-day-out case (one day past the tolerance)
+  still correctly fails — the tolerance itself didn't change, only which
+  relations within it count. Re-ran the real 4-night replay below after
+  the change: a genuine real "just after" case appeared
+  (`EDI→LPA`, depart 3 Nov — 2 days after October half-term's 1 Nov end —
+  the same Gran Canaria fare already seen tagged "Just after" in the
+  2026-09-17 work), correctly absent under the old strict rule and
+  correctly present under the new one.
 
 **Both products track flagging state independently, not through one
 shared column.** The same fare can legitimately clear both bars at once
@@ -1040,9 +1055,10 @@ synthetically; then a real, read-only replay of `detect()` across the
 four real delta nights still on disk (2026-09-16 through -19,
 `storage.save_index` patched to a no-op, the same technique already
 established in this project's 2026-09-17 min_trip_nights work) —
-8 weekend flags and 1 holiday flag, all genuinely correct shapes
-(`LGW→MAN` Sat→Sun, `LGW→CWL`/`LTN→CWL`/`LHR→CWL` all Fri→Sun,
-`LCY→CMN` genuinely overlapping October half-term). The combined digest
+8 weekend flags and, after the 2026-09-20 before/after revision above,
+2 holiday flags — all genuinely correct shapes (`LGW→MAN` Sat→Sun,
+`LGW→CWL`/`LTN→CWL`/`LHR→CWL` all Fri→Sun, `LCY→CMN` genuinely during
+October half-term, `EDI→LPA` genuinely 2 days after it). The combined digest
 was then rendered from those real flags (not synthetic) end to end in
 both text and HTML, and browser-checked at 375px: both section headers,
 the divider between them, the region/destination cards, the holiday tag

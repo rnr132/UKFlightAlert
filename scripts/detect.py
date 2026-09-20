@@ -90,26 +90,27 @@ def is_weekend_trip(depart_date, return_date):
     return _WEEKEND_SHAPES.get(shape) == nights
 
 
-def is_during_holiday(depart_date, return_date):
-    """True only when the trip genuinely overlaps a school holiday window
-    — the strict "during" relation from school_holidays.nearby(), not its
-    +/-2-day before/after tolerance. That tolerance exists for a
-    different job (tagging a fare on a digest as "just before" or "just
-    after" a holiday, a bonus factoid); a dedicated holiday-alerter
-    product means what it says — during, not near. No trip-length floor
-    either: a holiday trip is reasonably anywhere from a few days to a
-    few weeks.
+def is_holiday_trip(depart_date, return_date):
+    """True when the trip overlaps a school holiday window, or comes
+    within school_holidays.TOLERANCE_DAYS (2) of one on either side —
+    every relation school_holidays.nearby() can return (during, before,
+    after), not just "during" (2026-09-19 tried "during" only; revised
+    2026-09-20, directly requested: some people would happily take a
+    couple of days of annual leave on either side of a holiday for a
+    cheaper fare, so a trip landing just before or after still counts).
+    No trip-length floor — a holiday trip is reasonably anywhere from a
+    few days to a few weeks.
 
     Takes real date-like objects, matching is_weekend_trip()'s
     convention. school_holidays.nearby() itself wants ISO strings (it's
     built to read flags already loaded from JSON) — converted here rather
     than changing that function's contract, since its other caller
-    (notify.py's tag rendering) still wants the full during/before/after
-    distinction, unchanged."""
+    (notify.py's tag rendering) uses the same during/before/after result
+    to decide the tag's wording, unchanged by this."""
     result = school_holidays.nearby(
         {"depart_date": _as_date_str(depart_date), "return_date": _as_date_str(return_date)}
     )
-    return result is not None and result[1] == "during"
+    return result is not None
 
 
 # name -> eligibility predicate. The one place both products are defined;
@@ -117,7 +118,7 @@ def is_during_holiday(depart_date, return_date):
 # names twice each.
 PRODUCTS = {
     "weekend": is_weekend_trip,
-    "holiday": is_during_holiday,
+    "holiday": is_holiday_trip,
 }
 
 

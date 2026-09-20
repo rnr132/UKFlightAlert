@@ -228,7 +228,7 @@ _PRODUCT_COPY = {
     "holiday": {
         "title": "Holiday Deals",
         "emoji": "\U0001F3D6",
-        "intro": "flights during an upcoming school holiday",
+        "intro": "flights during, or within a couple of days of, an upcoming school holiday",
     },
 }
 
