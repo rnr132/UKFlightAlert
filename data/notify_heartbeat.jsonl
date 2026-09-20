@@ -1,3 +1,4 @@
 {"run_at": "2026-09-17T21:48:29.871417+00:00", "as_of": "2026-09-17", "is_digest_day": false, "sent": false, "reason": "not_digest_day", "flags_count": 0}
 {"run_at": "2026-09-18T08:30:13.100922+00:00", "as_of": "2026-09-18", "is_digest_day": true, "sent": true, "reason": null, "flags_count": 14, "recipients_count": 1}
 {"run_at": "2026-09-19T08:17:30.222682+00:00", "as_of": "2026-09-19", "is_digest_day": false, "sent": false, "reason": "not_digest_day", "flags_count": 0}
+{"run_at": "2026-09-20T08:51:38.584569+00:00", "as_of": "2026-09-20", "is_digest_day": false, "sent": false, "reason": "not_digest_day", "flags_count": 0}
