@@ -1074,3 +1074,67 @@ whichever real sweep — scheduled or `workflow_dispatch` — happens next;
 worth a deliberate look at the first couple of real nights once it does,
 the same way the Resend rollout got a deliberate look before trusting it
 at scale.
+
+## Real first run, and a real gap it surfaced: no lead-time cap (2026-09-25)
+
+The pivot went live for real starting the 2026-09-21 sweep (the first
+one to run with this code). Six real flags across four nights, both
+products working correctly on genuine changed prices — but every single
+one turned out to be 29-144 days ahead of departure:
+
+| Product | Route | Flagged | Departs | Lead time |
+|---|---|---|---|---|
+| weekend | LGW→TOS | 09-21 | 05-Dec-26 | 75 days |
+| weekend | STN→ROM | 09-21 | 09-Jan-27 | 110 days |
+| holiday | STN→RVN | 09-21 | 12-Feb-27 | 144 days |
+| holiday | LCY→HOU | 09-22 | 21-Oct-26 | 29 days |
+| holiday | LTN→DBV | 09-22 | 01-Nov-26 | 40 days |
+| holiday | LHR→ISB | 09-24 | 15-Dec-26 | 82 days |
+
+Raised directly after the 09-24 send (the 82-day LHR→ISB holiday alert):
+"there should be no alert if the time frame is more than 21 days." Real
+gap, not a design disagreement — neither `is_weekend_trip()` nor (the
+then-named) `is_during_holiday()` ever decided anything about *how far
+in the future* a flagged departure could be. The 2026-09-19 pivot was
+entirely about trip *shape*; lead time was simply never bounded on
+either product, not a considered choice for either one. The spread above
+(29 to 144 days, no pattern) is exactly what "unbounded" looks like in
+practice, not evidence either product wanted long lead times specifically.
+
+**Fix: `detection.max_lead_days: 21`**, checked in `detect()` right after
+the trip-shape gate, shared by both products for the same reason
+`drop_pct_threshold`/`min_observations` are — no evidence either needs a
+different bar yet. `lead_days = (row["depart_date"].date() - sweep_date).days`;
+skipped when `lead_days > max_lead_days` (so exactly 21 days out still
+clears it — the ask was "more than 21", not "21 or more"). Doesn't touch
+what gets *swept* — `horizon.far_months` still fetches and stores months
+8-19 out, since that history still feeds the eventual seasonal-comparison
+detector (PLAN.md §7's year-one note) — it only stops those far-future
+rows from ever being *alerted on*.
+
+One real consequence worth stating plainly: applying this cap to the six
+real flags above would have excluded every single one of them — nothing
+sent under the new system so far would have gone out under this rule.
+That's expected, not a red flag: it means the products have been
+correctly finding genuine statistical anomalies, just far further out
+than anyone asked to hear about. Old flag files are left as-is, not
+retroactively rewritten — unlike the 2026-09-05 BRE re-flag bug (which
+left the *index* in a state that would have caused wrong future
+behaviour), this doesn't corrupt any ongoing state; it's just a stricter
+rule applied going forward, the same way past threshold changes
+(15%→30% across several dates) never rewrote old flags either.
+
+No cap was added on the *holiday* product specifically because it might
+"reasonably" want a longer horizon (school holidays are often booked
+months out) — that tension was considered, but the literal ask plus the
+finding that lead time was never a deliberate design axis for either
+product argued for one shared rule rather than inventing an asymmetry
+neither product had actually asked for. Flagged to the user rather than
+silently assumed correct.
+
+Verified: the exact boundary (21 days -> included, 22 days -> excluded,
+5 days -> included, 0 days -> included) checked directly against the raw
+arithmetic; then a real, read-only replay of all four real delta nights
+above (`storage.save_index` patched to a no-op, the same technique used
+throughout this file) confirmed all six real over-cap flags are now
+correctly excluded, with no error.

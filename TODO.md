@@ -8,15 +8,17 @@ human needs to actually go *do*, independent of any single phase.
 
 ## Watch the first few real nights of Weekend/Holiday Deals (2026-09-19)
 
-The pivot to two hyper-specialized products, nightly delivery, is built
-and verified read-only (full record in `PLAN.md`) but has not yet run
-for real — the next scheduled or `workflow_dispatch` sweep is the first
-genuine test. Worth a deliberate look at the first couple of real
-sends: does nightly volume stay sane (the small real sample this
-session suggested ~2/night weekend, well under 1/night holiday, but
-that's 4 nights of data, not a real baseline), does the two-section
-email read well on an actual phone inbox rather than the browser
-preview, and does anything in `data/notify_heartbeat.jsonl` look off.
+**Update 2026-09-25 — this watch already paid off once.** The first four
+real nights (09-21 through 09-24) surfaced a real gap: no lead-time cap
+existed on either product, so every one of the six real flags sent so
+far was 29-144 days ahead of departure — including an 82-day-out Holiday
+Deals alert that prompted the fix. `detection.max_lead_days: 21` now
+caps both products; full record in `PLAN.md`. Worth continuing to watch
+now that this is in place: does real nightly volume stay sane once
+capped to near-term deals only (untested — every real flag so far would
+have been excluded by this rule, so there's no real data yet on what
+volume looks like *with* the cap), and does the two-section email still
+read well on an actual phone inbox.
 
 ---
 

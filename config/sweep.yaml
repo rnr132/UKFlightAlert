@@ -112,6 +112,21 @@ detection:
   # per-product for now (both read drop_pct_threshold/min_observations
   # above); revisit only once real volume from both suggests they need
   # different bars.
+  #
+  # Added 2026-09-25, directly requested after a real Holiday Deals
+  # alert went out 82 days ahead of departure: skip flagging anything
+  # departing more than this many days from tonight. Neither product
+  # actually decided on a lead-time cap when built — trip *shape* was
+  # the whole focus then (PLAN.md's 2026-09-19 pivot), and how far in
+  # the future a deal could be was simply left unbounded, not
+  # deliberately left open. Shared by both products for the same reason
+  # drop_pct_threshold/min_observations are: no evidence yet that they
+  # need different bars. The far-months sweep tier (horizon.far_months
+  # above) still fetches and stores months 8-19 out regardless — this
+  # only stops *alerting* on that far-future data, not collecting it;
+  # it's still needed for the eventual seasonal-comparison detector
+  # (PLAN.md §7's year-one note) once enough history exists.
+  max_lead_days: 21
 
 monitoring:
   # If the newest heartbeat is older than this when a run starts, print a

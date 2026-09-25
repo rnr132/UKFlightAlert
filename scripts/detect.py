@@ -10,8 +10,19 @@ Two hyper-specialized products, not one general-purpose detector
 entirely, not additively). The reasoning: almost nobody can actually act
 on a random mid-week, random-length fare found on short notice, so the
 system should only ever flag the two shapes a normal person really can —
-a spontaneous weekend, or a trip during a school holiday that's booked
-months ahead anyway. See PRODUCTS below for the two eligibility rules.
+a spontaneous weekend, or a trip during (or right around) a school
+holiday. See PRODUCTS below for the two eligibility rules.
+
+Both products also share a departure-date cap (detection.max_lead_days,
+2026-09-25): nothing departing more than that many days from tonight
+gets flagged, regardless of product. Added after a real Holiday Deals
+alert went out 82 days ahead of departure — neither product actually
+decided on a lead-time cap when built, trip *shape* was the whole focus
+then, and this axis was simply left unbounded rather than deliberately
+left open. The far-months sweep tier still fetches months 8-19 out
+regardless (needed for the eventual seasonal-comparison detector,
+PLAN.md §7) — this only stops alerting on that far-future data, not
+collecting it.
 
 For every flight whose price changed *tonight*, per product: checks
 whether tonight's price is both a genuine new low for that flight and
@@ -134,6 +145,7 @@ def detect(sweep_date, product, config=None):
     config = config or load_config()
     min_observations = config["detection"]["min_observations"]
     drop_pct_threshold = config["detection"]["drop_pct_threshold"]
+    max_lead_days = config["detection"]["max_lead_days"]
 
     delta_path = storage.DELTA_DIR / f"{sweep_date.isoformat()}.parquet"
     if not delta_path.exists():
@@ -168,6 +180,17 @@ def detect(sweep_date, product, config=None):
                 continue
 
             if not is_eligible(row["depart_date"], row["return_date"]):
+                continue
+
+            # Shared by both products (2026-09-25, directly requested after
+            # a real Holiday Deals alert went out 82 days ahead of
+            # departure — every real alert sent under the two-product
+            # system so far turned out to exceed this, 29-144 days out).
+            # Neither product actually decided on a lead-time cap when
+            # built; trip *shape* was the whole focus then, and this axis
+            # was simply left unbounded rather than deliberately left open.
+            lead_days = (row["depart_date"].date() - sweep_date).days
+            if lead_days > max_lead_days:
                 continue
 
             if key not in history.index:
