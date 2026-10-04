@@ -1138,3 +1138,51 @@ arithmetic; then a real, read-only replay of all four real delta nights
 above (`storage.save_index` patched to a no-op, the same technique used
 throughout this file) confirmed all six real over-cap flags are now
 correctly excluded, with no error.
+
+## Fri->Mon shape, 30% -> 20%, and a bounded "new low" (2026-10-04)
+
+Three changes, all directly requested:
+
+**1. Added Friday->Monday as a fourth weekend shape.** `_WEEKEND_SHAPES`
+gains `(4, 0): 3` alongside the existing Fri->Sun, Sat->Mon, Sat->Sun —
+a long weekend over a Monday is the same short-notice trip as the other
+three, just one night longer. Checked against the same kind of
+false-positive `is_weekend_trip()` already guards against (a Friday
+departure with a Monday return *weeks* later shares the weekday pair but
+isn't a weekend trip) — the night-count check already in place covers
+the new shape for free, no separate guard needed.
+
+**2. `drop_pct_threshold` 0.30 -> 0.20**, directly requested (looser
+again, more volume wanted) — reverses most of the 0.20->0.25->0.30
+tightening from 2026-09-17. Same mechanism as every past change to this
+value: `notify.py` filters at render time against the live config, so
+this takes effect on the existing `data/flags/*.jsonl` record
+immediately, not just on new flags.
+
+**3. Bounded "new low" to a trailing 6-month window
+(`detection.new_low_lookback_days: 183`), replacing the all-time
+comparison.** Raised directly: an all-time floor only ever gets *harder*
+to clear as a flight accrues more history — eventually ordinary price
+drift (inflation, fuel surcharges, seasonal creep) would put every
+flight's true all-time low permanently out of reach, silently stopping
+all future flagging for it even while a fare is still a genuine deal
+against its current typical price. `detect()` now slices `prior` down to
+observations within `new_low_lookback_days` of tonight before taking
+`baseline_min` from that window; `baseline_median` (the
+`drop_pct_threshold` check) is unaffected — still computed over full
+prior history, since only the new-low floor was the one that ratchets
+one-directionally and was the one actually raised as a problem. A key
+with prior history but nothing inside the window is skipped (same
+"nothing to compare against" treatment as `prior.empty`), rather than
+either flagging unconditionally or falling back to the all-time min.
+
+Verified: `is_weekend_trip()` re-checked against six hand-built cases
+(Fri->Sun, the new Fri->Mon, Sat->Mon, Sat->Sun, a Fri->Sat 1-nighter,
+and a Fri->Mon pair 17 nights apart) — all four real shapes true, both
+negatives false. The windowed-vs-all-time new-low logic checked against
+a synthetic history with a single 150 fare over 8 months stale and a
+recent 6-month floor of 260: the old all-time rule permanently blocks
+255 (255 <= 150 is false, forever); the new windowed rule correctly
+allows it (255 <= 260). Config confirmed loading both new values
+(`drop_pct_threshold: 0.2`, `new_low_lookback_days: 183`) via
+`load_config()`.

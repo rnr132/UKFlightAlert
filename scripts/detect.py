@@ -25,16 +25,21 @@ PLAN.md §7) — this only stops alerting on that far-future data, not
 collecting it.
 
 For every flight whose price changed *tonight*, per product: checks
-whether tonight's price is both a genuine new low for that flight and
-meaningfully below its own recent typical price — AND strictly better
-than the last price this exact flight was already flagged at *for that
-product*, so a fare that merely holds at its own record low (e.g. a
-different flight number now selling the same price) doesn't re-flag
-every night it happens to be re-observed. The two products track this
-independently (storage.py's flagged_min_price_<product> columns) since
-the same fare can legitimately qualify for both at once — a Saturday
-flight during half-term is both a weekend trip and a holiday trip, and
-flagging it for one shouldn't block the other from ever flagging it.
+whether tonight's price is both a new low *within the trailing
+detection.new_low_lookback_days* (2026-10-04: bounded to 6 months, not
+all-time — an all-time floor only gets harder to clear as a flight
+accrues more history, so ordinary price drift would eventually make
+every flight's true all-time low unreachable and silently stop future
+flagging for it) and meaningfully below its own recent typical price —
+AND strictly better than the last price this exact flight was already
+flagged at *for that product*, so a fare that merely holds at its own
+record low (e.g. a different flight number now selling the same price)
+doesn't re-flag every night it happens to be re-observed. The two
+products track this independently (storage.py's
+flagged_min_price_<product> columns) since the same fare can legitimately
+qualify for both at once — a Saturday flight during half-term is both a
+weekend trip and a holiday trip, and flagging it for one shouldn't block
+the other from ever flagging it.
 
 Flags are written to data/flags/<product>/YYYY-MM-DD.jsonl. Nothing gets
 sent anywhere — this step only finds and records candidates; delivery is
@@ -75,15 +80,18 @@ def _as_date_str(value):
 
 _WEEKEND_SHAPES = {
     (4, 6): 2,  # Friday -> Sunday
+    (4, 0): 3,  # Friday -> Monday
     (5, 0): 2,  # Saturday -> Monday
     (5, 6): 1,  # Saturday -> Sunday
 }
 
 
 def is_weekend_trip(depart_date, return_date):
-    """True only for a Friday->Sunday, Saturday->Monday, or
-    Saturday->Sunday trip — the three shapes someone can plausibly book on
-    short notice without pre-arranged leave. Replaces the old generic
+    """True only for a Friday->Sunday, Friday->Monday, Saturday->Monday,
+    or Saturday->Sunday trip — the shapes someone can plausibly book on
+    short notice without pre-arranged leave (Friday->Monday added
+    2026-10-04, directly requested: a long weekend over a Monday is the
+    same short-notice trip as the others). Replaces the old generic
     "2+ nights, any shape" floor and its Sat-Sun exception entirely
     (2026-09-19) — a 2-night midweek trip that used to qualify no longer
     does; this product isn't a superset of the old rule.
@@ -146,6 +154,7 @@ def detect(sweep_date, product, config=None):
     min_observations = config["detection"]["min_observations"]
     drop_pct_threshold = config["detection"]["drop_pct_threshold"]
     max_lead_days = config["detection"]["max_lead_days"]
+    new_low_lookback_days = config["detection"]["new_low_lookback_days"]
 
     delta_path = storage.DELTA_DIR / f"{sweep_date.isoformat()}.parquet"
     if not delta_path.exists():
@@ -200,8 +209,22 @@ def detect(sweep_date, product, config=None):
             if prior.empty:
                 continue
 
-            baseline_min = prior["price_gbp"].min()
             baseline_median = prior["price_gbp"].median()
+
+            # "New low" is bounded to the last new_low_lookback_days, not
+            # all-time: an all-time floor only ever gets harder to beat as
+            # a flight accumulates more history, so months of ordinary
+            # price drift (inflation, fuel surcharges, ...) would
+            # eventually make every flight's true all-time low
+            # unreachable and silently stop all future flagging for it.
+            # Six months keeps the bar "lowest it's been in a while", not
+            # "lowest it will ever be again" (directly requested).
+            recent_cutoff = row["observed_at"] - pd.Timedelta(days=new_low_lookback_days)
+            recent_prior = prior[prior["observed_at"] >= recent_cutoff]
+            if recent_prior.empty:
+                continue  # nothing within the lookback window to compare against
+            baseline_min = recent_prior["price_gbp"].min()
+
             tonight_price = row["price_gbp"]
 
             is_new_low = tonight_price <= baseline_min

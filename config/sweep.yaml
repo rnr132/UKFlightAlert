@@ -92,19 +92,29 @@ detection:
   # distinct nights — guards against flagging noise from 1-2 data points
   # (PLAN.md §7's plan for Phase 2, now built as scripts/detect.py).
   min_observations: 5
-  # Flag only when tonight's price is a genuine new low AND at least this
-  # fraction below its own recent median. Either condition alone is too
-  # weak on its own — see PLAN.md's Phase 2 section for why both are
-  # required together. 0.15 -> 0.20 on 2026-09-10 (140 -> ~80 flags/week);
-  # 0.20 -> 0.25 on 2026-09-17 (47/43 unique -> 31/29 unique); 0.25 -> 0.30
-  # same day, request direct rather than a volume complaint this time —
-  # real 7-day window at the time: 16 flags / 16 unique at 30% (all
-  # already-unique; nothing left to collapse at this bar). Also checked
-  # and recorded then: 11/11 at 35%, in case 30% still isn't the number.
-  # notify.py's digest builder filters to this same bar at render time
-  # (not the stored data/flags/*.jsonl files), so the change takes effect
-  # on the existing record immediately, not just on new flags.
-  drop_pct_threshold: 0.30
+  # Flag only when tonight's price is a new low (see new_low_lookback_days
+  # below) AND at least this fraction below its own recent median. Either
+  # condition alone is too weak on its own — see PLAN.md's Phase 2 section
+  # for why both are required together. 0.15 -> 0.20 on 2026-09-10 (140 ->
+  # ~80 flags/week); 0.20 -> 0.25 on 2026-09-17 (47/43 unique -> 31/29
+  # unique); 0.25 -> 0.30 same day, request direct rather than a volume
+  # complaint this time — real 7-day window at the time: 16 flags / 16
+  # unique at 30% (all already-unique; nothing left to collapse at this
+  # bar). Also checked and recorded then: 11/11 at 35%, in case 30% still
+  # isn't the number. 0.30 -> 0.20 on 2026-10-04, directly requested
+  # (looser again, more volume wanted). notify.py's digest builder filters
+  # to this same bar at render time (not the stored data/flags/*.jsonl
+  # files), so the change takes effect on the existing record immediately,
+  # not just on new flags.
+  drop_pct_threshold: 0.20
+  # How far back a "new low" is allowed to look (2026-10-04, directly
+  # requested): bounded to ~6 months, not all-time. An all-time floor only
+  # gets harder to clear as a flight accrues more history, so ordinary
+  # price drift (inflation, fuel surcharges, ...) would eventually make
+  # every flight's true all-time low unreachable and silently stop all
+  # future flagging for it. 183 days keeps the bar "lowest it's been in a
+  # while", not "lowest it will ever be again".
+  new_low_lookback_days: 183
   # min_trip_nights (a generic 2-night floor with a Sat-Sun exception)
   # retired 2026-09-19: replaced by two hyper-specialized products
   # instead of one general-shape rule — see detect.PRODUCTS
