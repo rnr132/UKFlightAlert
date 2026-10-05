@@ -1186,3 +1186,17 @@ recent 6-month floor of 260: the old all-time rule permanently blocks
 allows it (255 <= 260). Config confirmed loading both new values
 (`drop_pct_threshold: 0.2`, `new_low_lookback_days: 183`) via
 `load_config()`.
+
+**Noted for later, not acted on now:** once a full year of history
+exists and the seasonal-comparison detector this file has flagged twice
+already (§3's "Detection basis (year one)", §7's "Twelve months, not
+four weeks, until 'is this cheap for the season' is answerable") can
+actually be built, revisit whether the trailing 6-month
+`new_low_lookback_days` window should fold into that seasonal window
+rather than stay a separate flat lookback — e.g. comparing against the
+same calendar month a year back instead of (or alongside) the last 183
+days, so a winter fare isn't judged against a summer baseline just
+because both fall inside one trailing window. Five-ish weeks of real
+history exist as of this entry, nowhere near enough to design this
+properly — recorded here so it isn't rediscovered from scratch once
+there is.
