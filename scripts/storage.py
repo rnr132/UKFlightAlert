@@ -202,6 +202,15 @@ def load_index():
     for col in FLAGGED_PRICE_COLUMNS:
         if col not in index_df.columns:
             index_df[col] = float("nan")
+    # INDEX_COLUMNS is the schema. Anything else in the file (the retired
+    # flagged_min_price, 2026-09-19) is dropped here so the next
+    # save_index() really removes it — leaving it to "fall out on its own"
+    # didn't work: filter_changed() carries every column of untouched rows
+    # forward, so it survived 17 nightly saves (found 2026-10-06 in the
+    # real committed index, 90 stale values and counting).
+    stray = [c for c in index_df.columns if c not in INDEX_COLUMNS]
+    if stray:
+        index_df = index_df.drop(columns=stray)
     return index_df
 
 

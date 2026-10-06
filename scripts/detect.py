@@ -160,6 +160,36 @@ FUNNEL_STAGES = (
 )
 
 
+_WARNED = set()
+
+
+def effective_new_low_lookback_days(config):
+    """The new-low window detect() can actually honour: the configured
+    detection.new_low_lookback_days, capped at retention.raw_days.
+
+    rollup_stale() deletes raw rows older than raw_days, and detect() only
+    reads raw history (load_full_history()), so a lookback longer than
+    that silently behaves as raw_days. 2026-10-04 set 183 days against a
+    120-day retention; from about 2026-12-26 — when the first rows reach
+    120 days — the "6-month" window would have been 4 months with nothing
+    saying so. Capping it here keeps behaviour identical to what storage
+    would have done anyway, but says so once per run instead of hiding it.
+    Which number to change (the window down, or retention up at the cost
+    of repo size) is the owner's call; this deliberately changes neither."""
+    configured = config["detection"]["new_low_lookback_days"]
+    raw_days = config.get("retention", {}).get("raw_days")
+    if raw_days is None or configured <= raw_days:
+        return configured
+    if "lookback" not in _WARNED:
+        _WARNED.add("lookback")
+        print(
+            f"detect: detection.new_low_lookback_days={configured} is longer than "
+            f"retention.raw_days={raw_days}; raw history older than {raw_days} days is rolled "
+            f"up and unreadable, so the effective new-low window is {raw_days} days."
+        )
+    return raw_days
+
+
 def detect(sweep_date, product, config=None, stats=None, persist=True):
     """Return a list of flagged-deal dicts for the given sweep date and
     product ("weekend" or "holiday" — see PRODUCTS). See write_flags() for
@@ -181,7 +211,7 @@ def detect(sweep_date, product, config=None, stats=None, persist=True):
     min_observations = config["detection"]["min_observations"]
     drop_pct_threshold = config["detection"]["drop_pct_threshold"]
     max_lead_days = config["detection"]["max_lead_days"]
-    new_low_lookback_days = config["detection"]["new_low_lookback_days"]
+    new_low_lookback_days = effective_new_low_lookback_days(config)
 
     counts = dict.fromkeys(FUNNEL_STAGES, 0)
 

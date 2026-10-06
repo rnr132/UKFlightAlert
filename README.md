@@ -262,6 +262,34 @@ cheap. Full reasoning in [PLAN.md §4](PLAN.md).
 - `workflow_dispatch` is always available on the workflow's Actions page
   for replaying a missed night by hand, independent of the schedule.
 
+## Tests
+
+```bash
+pytest -q        # from the repo root; about a second
+```
+
+Around 125 hermetic tests: SMTP is faked, `data/` is replaced by a
+throwaway store, and nothing needs a secret or the network — they cannot
+send mail or spend an API call. They cover the rules that decide what real
+people get emailed (trip shapes, the lead-time cap, the new-low window,
+per-product flagged prices), the sending path (one message per recipient,
+no address in a log or in another recipient's inbox, safe to re-run),
+storage's index bookkeeping, booking links, the school-holiday calendar,
+and the real config file and workflow (for example, that the test step
+sits *before* the digest step).
+
+The nightly workflow runs them between the sweep and the digest. A red
+test blocks that night's email, not that night's data — the sweep's
+results are still committed. After fixing the cause, replay the digest by
+hand (`workflow_dispatch`): that night's flags are on disk, but a
+single-night digest won't pick them up tomorrow by itself.
+
+The suite was checked the way it matters — by breaking the code on
+purpose (16 deliberate breakages across the rules, storage, booking
+links, workflow and config) and confirming each one fails a test, not just
+by passing against working code. What it can't tell you is whether a
+*threshold* is a good choice; that's what `scripts/replay.py` is for.
+
 ## Keeping the workflows current
 
 Every `uses:` in `.github/workflows/` is pinned to a full commit SHA, not

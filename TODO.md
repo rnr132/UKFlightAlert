@@ -6,6 +6,33 @@ human needs to actually go *do*, independent of any single phase.
 
 ---
 
+## Decide: new-low window vs how much history is kept (2026-10-06)
+
+`detection.new_low_lookback_days` is 183 but `retention.raw_days` is 120, so
+the window can never be longer than 120 days (it's capped, and says so in
+the run log). Nothing is wrong yet — there are only ~39 days of history —
+but from about 26 Dec the "6-month" window is really 4 months. Pick one:
+
+- **Lower the window to 120** — free, matches what's true. Do this unless
+  you specifically need 6 months.
+- **Raise `raw_days` to 183** — honours the 6 months but makes the
+  monthly data files ~1.5x bigger, and the repo already grows ~2 MB a
+  night (next item). Only worth it after that's fixed.
+
+## Repo growth: ~2 MB of new binary data every night (2026-10-06)
+
+Measured on the last three sweep commits (index ~0.9 MB + monthly files
+~1.0-1.3 MB, rewritten whole each night; git can't compress that against
+the previous night). Very roughly 0.8 GB/year now and rising with
+retention — PLAN.md §4 designed against exactly this. Not urgent
+(`actions/checkout` is shallow; only local clones feel it), but it's
+cheapest to fix early. The likely fix is compacting weekly instead of
+nightly (what §4 specified; also widens `replay.py`'s window from ~4 nights
+to ~10), plus something smarter for the index. Needs your call before I
+touch storage — see PLAN.md's 2026-10-06 tests entry for the numbers.
+
+---
+
 ## Set the REPLY_TO secret (2026-10-06) — the one step only you can do
 
 The digest now sends one message per recipient (nobody sees anyone

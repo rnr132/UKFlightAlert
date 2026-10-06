@@ -1359,3 +1359,98 @@ also rendered from the real heartbeats and matches the facts found by
 hand (7 nights, 0 failed calls, 1 digest, 3 recipients). Not yet seen:
 a real report email (needs `REPLY_TO`, TODO.md) or a funnel in a real
 heartbeat (starts with the next sweep).
+
+## Tests, a gate before the email, and four things checking turned up (2026-10-06)
+
+The repo had no committed tests. Every verification so far — and there
+were dozens, many of them careful (the Fri→Sun "wrong week" trap, the
+±2-day boundaries, 21 vs 22 days, per-product flagged state) — lived in
+shell one-liners that evaporated with the session. Meanwhile the rules
+changed roughly six times in three weeks, the last two by another session
+with nothing to catch a regression, and the output goes to real people.
+
+**Built:** about 125 pytest cases in `tests/`, hermetic by construction —
+SMTP faked, `data/` replaced by a tmp-dir store seeded through the real
+parquet schema (so a schema change breaks them loudly), no secrets, no
+network. By area: the two trip-shape rules and the holiday window incl.
+the year boundary; detection through `detect()` (lead cap inclusive at 21
+and exclusive at 22, the 5-night rule, drop boundary, new-low window,
+already-flagged ties, one fare qualifying for both products without either
+blocking the other); storage's index bookkeeping (the 08-31
+double-counting and 09-05 wiped-flagged-price regressions pinned);
+booking links (batching, token only in the header, a rejected token not
+retried, a conversion failure never failing the sweep); the sending path
+and owner report (see the two entries above); the school-holiday calendar's
+assumptions (ordered, and windows far enough apart that a trip is only
+ever near one); and the *real* `config/sweep.yaml` and `sweep.yml`
+checked structurally — every key the code reads exists, and the test step
+sits after the sweep and before the digest, can fail the run, and is given
+no secrets.
+
+**The gate:** a `Run tests` step between the sweep and the digest. A red
+test blocks that night's email and nothing else — the sweep's data is
+already fetched and the last step still commits it. Cost: a night the
+suite fails leaves that night's flags on disk but unsent, and a
+single-night digest won't revisit them tomorrow, so recovery is a
+`workflow_dispatch` replay once fixed (documented in README and the
+workflow). Accepted: emailing strangers from code that fails its own
+rules is the worse failure.
+
+**Checked by breaking things, not only by passing:** 16 deliberate
+breakages — shape rule ignoring the night count, lead cap off by one,
+holiday back to "during" only, ties re-flagging, new-low back to
+all-time, 5-night rule off, flagged prices wiped on ingest, same-day
+double counting, the retired column no longer dropped, the token in the
+URL, a rejected token retried, link failures failing the sweep, the test
+step made non-blocking or removed, the calendar edited into overlap, a
+setting deleted from the YAML — **16 of 16 caught**, and for the four
+where `pytest -x` stopped at a different test than the one written for
+that bug, re-run without it to confirm the dedicated test fails too.
+
+**Four things building this turned up, none hypothetical:**
+
+1. **My own 2026-09-19 claim was wrong.** That entry said the retired
+   `flagged_min_price` column would be "dropped from the file on the next
+   `save_index()`." It wasn't: `filter_changed()` carries every column of
+   untouched rows forward, so it was still in the real committed index 17
+   nightly saves later (90 stale values among 61,049 rows). Harmless to
+   behaviour, but dead data forever and a false statement in this file.
+   `load_index()` now drops anything outside `INDEX_COLUMNS`; a test pins
+   it. The original entry above is left as written.
+2. **`new_low_lookback_days: 183` can't be honoured** against
+   `retention.raw_days: 120`: `rollup_stale()` deletes raw rows older than
+   that and `detect()` only reads raw history, so from about 2026-12-26
+   (when the first rows reach 120 days) the "6-month" window silently
+   becomes 4. Nothing was wrong *yet* — the project has only ~39 days of
+   history, so the window is all of it either way. `detect.
+   effective_new_low_lookback_days()` caps the window at retention and
+   says so once per run; it changes neither number, because which one
+   moves is the owner's call (TODO.md, with the cost below).
+3. **The repo grows ~2 MB a night, and the growth is set by retention.**
+   Measured from the last three sweep commits: ~2.0–2.2 MB of new binary
+   data each (index ≈ 0.9 MB, monthly files ≈ 1.0–1.3 MB, deltas/heartbeat
+   negligible), none of which git can delta against the previous night —
+   the exact failure §4 designed against ("on the order of a gigabyte of
+   git history a year"). Two causes: `compact_deltas()` runs *nightly*,
+   rewriting every touched monthly file each time (§4 specified weekly),
+   and the index — whose `observation_count` changes for most keys every
+   night — is rewritten whole. The pack is only 37 MB after 39 nights
+   because the files were small early; it's accelerating, and monthly files
+   hold up to `raw_days` of history, so at 120 days they'd be ~3x today's
+   size and at 183 ~4.7x (rough, linear in history): very roughly 1.6 GB/
+   year at 120 days, 2.3 GB at 183, against GitHub's ~1 GB guidance. Not
+   urgent — local clones are the cost, `actions/checkout` is shallow — but
+   it's why raising retention to honour the 183 days is expensive *until*
+   compaction stops running nightly. **Not changed here** (design-level,
+   needs sign-off).
+4. **Bug found by the tests of the tool I'd just written:** `replay.py`
+   accepted `--set detection=0.3` and would have replaced the whole section
+   (recorded in the entry above; fixed before it shipped).
+
+**What this does not cover, stated so it isn't assumed:** whether a
+threshold is a good *choice* (that's `replay.py`); `places.py`/`airlines.py`
+data quality; the real Resend/Travelpayouts behaviour (both faked — a real
+send is still the owner's `--test`); the HTML's look (browser-checked at
+375px, by hand, per this project's convention). The local venv is Python
+3.9 and CI is 3.12, so the first green CI run is the real check of the
+suite itself.

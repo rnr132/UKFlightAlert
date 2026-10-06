@@ -46,6 +46,20 @@ jobs:
           TRAVELPAYOUTS_TOKEN: ${{ secrets.TRAVELPAYOUTS_TOKEN }}
         run: python scripts/sweep.py
 
+      - name: Run tests
+        # Between the sweep and the digest on purpose (2026-10-06): a
+        # regression in the detection rules or the sending code fails loudly
+        # here, *before* anything is emailed to real people, while the data
+        # the sweep already fetched above is still committed by the last
+        # step. Deliberately given no secrets — the suite fakes SMTP and
+        # works in a temp dir, and a test must never be able to send mail
+        # or spend an API call. If this ever reddens a night, fix the cause
+        # and replay the digest by hand (workflow_dispatch): that night's
+        # flags are already on disk, but a single-night digest won't pick
+        # them up tomorrow on its own.
+        timeout-minutes: 5
+        run: pytest -q
+
       - name: Send nightly digest
         # Runs every night now (2026-09-19 — no more weekday gate; see
         # notify.py's module docstring), skipping cleanly (exit 0) on a
