@@ -59,7 +59,7 @@ Usage:
 """
 import argparse
 import json
-from datetime import date
+from datetime import date, timedelta
 
 import pandas as pd
 
@@ -286,7 +286,13 @@ def detect(sweep_date, product, config=None, stats=None, persist=True):
             # unreachable and silently stop all future flagging for it.
             # Six months keeps the bar "lowest it's been in a while", not
             # "lowest it will ever be again" (directly requested).
-            recent_cutoff = row["observed_at"] - pd.Timedelta(days=new_low_lookback_days)
+            # stdlib timedelta, not pd.Timedelta(days=...): that constructor trips a
+            # NumPy "generic unit" DeprecationWarning from NumPy 2.5 (CI
+            # installs the latest NumPy; local dev was on 2.0.2, so it was
+            # invisible), which NumPy says will become an error. Python hides
+            # DeprecationWarnings outside __main__, so the nightly sweep was
+            # emitting it unseen. Found 2026-10-06 via the first CI test run.
+            recent_cutoff = row["observed_at"] - timedelta(days=new_low_lookback_days)
             recent_prior = prior[prior["observed_at"] >= recent_cutoff]
             if recent_prior.empty:
                 continue  # nothing within the lookback window to compare against

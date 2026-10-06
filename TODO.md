@@ -6,6 +6,15 @@ human needs to actually go *do*, independent of any single phase.
 
 ---
 
+## Watch the first run after 19 Oct: `ubuntu-latest` becomes Ubuntu 26 (2026-10-06)
+
+GitHub flagged it on the 2026-10-06 run: the `ubuntu-latest` label migrates
+to Ubuntu 26 from 19 Oct. Python comes from `actions/setup-python` (3.12),
+not the image, so it should be a non-event — but the test step now runs
+before the digest, so if anything about the new image breaks the install
+or the suite, it fails *before* anyone is emailed rather than after. If
+the first post-19-Oct run is red, that's the first place to look.
+
 ## Decide: new-low window vs how much history is kept (2026-10-06)
 
 `detection.new_low_lookback_days` is 183 but `retention.raw_days` is 120, so

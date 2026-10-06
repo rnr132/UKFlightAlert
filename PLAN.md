@@ -1447,6 +1447,29 @@ that bug, re-run without it to confirm the dedicated test fails too.
    accepted `--set detection=0.3` and would have replaced the whole section
    (recorded in the entry above; fixed before it shipped).
 
+5. **Found by the first real CI run, not by anything local:** the
+   production sweep was emitting a NumPy `DeprecationWarning` every
+   night — `pd.Timedelta(days=…)` in `detect()` trips NumPy 2.5's
+   deprecated "generic" timedelta unit, which NumPy says "will raise an
+   error in the future." CI installs the latest NumPy (2.5.3; `numpy`
+   isn't pinned, it's a transitive dependency of the pinned pandas) while
+   the local venv had 2.0.2, so it never showed up here. It also didn't
+   show up in the nightly log: Python hides `DeprecationWarning`s raised
+   outside `__main__`, so the sweep had been emitting it unseen — pytest
+   surfaced it as 35 warnings. Reproduced exactly (a throwaway Python
+   3.12 environment built from `requirements.txt`), confirmed it fires on
+   the **real data path** (replay on real nights with warnings promoted to
+   errors) and not just in tests, and fixed by using the stdlib
+   `timedelta` — same value, no pandas constructor. After: zero warnings
+   under CI's versions; the same 279 flags on both Python 3.9/NumPy 2.0.2
+   and Python 3.12/NumPy 2.5.3 across every real night and three settings
+   (identical result hash), so the two environments agree. `pytest.ini`
+   now promotes that one warning to an error, so any return of it is a red
+   test before the digest rather than a silent future outage. `numpy` is
+   deliberately left floating — pinning a transitive dependency is a
+   separate call; the gate is what turns a breaking release into a red
+   run before anything is emailed.
+
 **What this does not cover, stated so it isn't assumed:** whether a
 threshold is a good *choice* (that's `replay.py`); `places.py`/`airlines.py`
 data quality; the real Resend/Travelpayouts behaviour (both faked — a real
