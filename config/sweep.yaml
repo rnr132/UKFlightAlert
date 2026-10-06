@@ -227,3 +227,10 @@ notify:
   # record. Unset = digests still send, but with no Reply-To and no
   # "reply to stop" line, and a warning in the run log.
   reply_to_env_var: "REPLY_TO"
+  # Which night (Python's weekday(): 0=Monday ... 6=Sunday) notify.py also
+  # emails the owner-only weekly report — to the REPLY_TO inbox, never the
+  # recipient list. Weekly rather than nightly because most nights send
+  # nothing, and a nightly "nothing happened" email would be noise nobody
+  # reads. Sent by the same job it reports on, so a Monday with no report
+  # means the job itself has stopped (the report's last line says so).
+  owner_report_weekday: 0

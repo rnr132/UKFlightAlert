@@ -163,7 +163,40 @@ python scripts/notify.py --dry-run                     # build it, print it, sen
 python scripts/notify.py --dry-run --date 2026-10-02   # preview a past night that had flags
 python scripts/notify.py --test you@x.com              # ONE real email, for format review
 python scripts/notify.py --date 2026-10-02 --resend    # replay a night, even fares already sent
+python scripts/notify.py --owner-report                # print the weekly owner summary (sends nothing)
+
+# Preview a detection change against real recent nights before making it
+python scripts/replay.py
+python scripts/replay.py --set detection.drop_pct_threshold=0.25
 ```
+
+## Tuning a threshold safely
+
+Every detection threshold lives in the `detection` block of
+`config/sweep.yaml`. Each past change (the drop threshold has been through
+15% → 30% → 20%, plus the trip-shape rules and the 21-day cap) was judged
+by reading the emails it produced *after* they went out — fine for one
+recipient, not once strangers are on the list. So preview first:
+
+```bash
+python scripts/replay.py --set detection.drop_pct_threshold=0.25
+```
+
+It re-runs detection against the real nights still on disk under that
+value, prints what would have flagged next to what the current settings
+flag, and shows where every other fare dropped out (the funnel: changed →
+right shape → soon enough → seen enough nights → has history → new low →
+far enough below typical → flagged). It is strictly read-only and refuses
+a setting name it doesn't recognise. It's a preview, not a measurement:
+only the last few nights still exist as raw deltas, and they're judged
+against today's index (the script's docstring spells out how).
+
+The same funnel is recorded in `data/heartbeat.jsonl` every night, and
+every Monday the digest step also emails the **owner** (the `REPLY_TO`
+inbox, never the recipient list) a summary: sweep health, who was sent
+what, and that funnel summed over the week with the tightest tunable gate
+named. The report is sent by the same nightly job it describes, so a
+Monday with no report is itself the alarm — check the Actions tab.
 
 A sweep exits non-zero if any origin-month call ultimately failed after
 retries — but whatever it *did* successfully fetch still gets committed
@@ -192,7 +225,9 @@ data/
                              weekend/ or holiday/ folder — only created
                              on nights with something to say
   heartbeat.jsonl            one line per run: rows fetched/changed,
-                             failures, cheapest fare seen, flags found
+                             failures, cheapest fare seen, flags found,
+                             and the per-product funnel (where that
+                             night's changed fares dropped out)
   notify_heartbeat.jsonl     one line per real notify.py run (not
                              --dry-run/--test): sent or skipped, why, how
                              many were delivered or failed, and which
@@ -255,6 +290,8 @@ scripts/
   sweep.py              fetch, throttle, retry, ingest, detect, heartbeat
   storage.py            normalize, delta write, compaction, rollup
   detect.py             deal detection — the two products' rules, vs. own history
+  replay.py             read-only "what would this have flagged?" preview for
+                        any detection setting, against real recent nights
   booking_links.py      builds Aviasales search links and converts them to
                         tracked partner links (the one network call outside
                         sweep.py's fetch)

@@ -141,10 +141,37 @@ PRODUCTS = {
 }
 
 
-def detect(sweep_date, product, config=None):
+# Where each night's changed fares drop out, in the order detect() applies
+# the gates. The cheap, high-selectivity tests (trip shape, lead time) come
+# first so these counts read as a funnel — "of everything that changed,
+# this many were the right shape, of those this many were close enough" —
+# rather than as an artefact of whichever test happened to run first.
+# Reordering the gates never changes which fares flag (they are all ANDed);
+# it was checked against the old order on real nights before shipping.
+FUNNEL_STAGES = (
+    "changed",  # rows whose price changed tonight — the only ones evaluated
+    "right_shape",  # trip shape fits the product (weekend day-pair / holiday window)
+    "within_lead_cap",  # departs within detection.max_lead_days
+    "seen_enough",  # observed on >= detection.min_observations distinct nights
+    "has_history",  # an earlier observation exists inside the new-low lookback window
+    "new_low",  # tonight's price <= the lowest in that window
+    "drop_ok",  # ... and at least detection.drop_pct_threshold below its median
+    "flagged",  # ... and strictly beats the price this product last flagged it at
+)
+
+
+def detect(sweep_date, product, config=None, stats=None, persist=True):
     """Return a list of flagged-deal dicts for the given sweep date and
-    product ("weekend" or "holiday" — see PRODUCTS). Read-only — see
-    write_flags() for persisting the result."""
+    product ("weekend" or "holiday" — see PRODUCTS). See write_flags() for
+    persisting the result.
+
+    stats: optional dict, filled with the FUNNEL_STAGES counts for this run
+    — how many of tonight's changed fares survived each gate — so "why was
+    last night silent?" has an answer without re-deriving it by hand.
+
+    persist=False makes this strictly read-only (the index isn't saved), for
+    scripts/replay.py: previewing a threshold change against real past
+    nights must never be able to touch the real flagged-price state."""
     if product not in PRODUCTS:
         raise ValueError(f"unknown product {product!r}, expected one of {sorted(PRODUCTS)}")
     is_eligible = PRODUCTS[product]
@@ -156,13 +183,21 @@ def detect(sweep_date, product, config=None):
     max_lead_days = config["detection"]["max_lead_days"]
     new_low_lookback_days = config["detection"]["new_low_lookback_days"]
 
+    counts = dict.fromkeys(FUNNEL_STAGES, 0)
+
+    def _finish(flags):
+        if stats is not None:
+            stats.update(counts)
+        return flags
+
     delta_path = storage.DELTA_DIR / f"{sweep_date.isoformat()}.parquet"
     if not delta_path.exists():
-        return []  # nothing changed that night — nothing to (re-)evaluate
+        return _finish([])  # nothing changed that night — nothing to (re-)evaluate
 
     tonight = pd.read_parquet(delta_path)
+    counts["changed"] = len(tonight)
     if tonight.empty:
-        return []
+        return _finish([])
 
     index_df = storage.load_index()
     index_lookup = index_df.set_index(storage.KEY_COLUMNS)
@@ -178,18 +213,9 @@ def detect(sweep_date, product, config=None):
         history = history.set_index(storage.KEY_COLUMNS).sort_index()
 
         for _, row in group.iterrows():
-            key = _key_tuple(row)
-
-            if key not in index_lookup.index:
-                continue  # shouldn't happen — every changed row was just indexed
-            obs_count = index_lookup.loc[key, "observation_count"]
-            if isinstance(obs_count, pd.Series):
-                obs_count = obs_count.iloc[0]
-            if obs_count < min_observations:
-                continue
-
             if not is_eligible(row["depart_date"], row["return_date"]):
                 continue
+            counts["right_shape"] += 1
 
             # Shared by both products (2026-09-25, directly requested after
             # a real Holiday Deals alert went out 82 days ahead of
@@ -201,6 +227,17 @@ def detect(sweep_date, product, config=None):
             lead_days = (row["depart_date"].date() - sweep_date).days
             if lead_days > max_lead_days:
                 continue
+            counts["within_lead_cap"] += 1
+
+            key = _key_tuple(row)
+            if key not in index_lookup.index:
+                continue  # shouldn't happen — every changed row was just indexed
+            obs_count = index_lookup.loc[key, "observation_count"]
+            if isinstance(obs_count, pd.Series):
+                obs_count = obs_count.iloc[0]
+            if obs_count < min_observations:
+                continue
+            counts["seen_enough"] += 1
 
             if key not in history.index:
                 continue
@@ -224,11 +261,17 @@ def detect(sweep_date, product, config=None):
             if recent_prior.empty:
                 continue  # nothing within the lookback window to compare against
             baseline_min = recent_prior["price_gbp"].min()
+            counts["has_history"] += 1
 
             tonight_price = row["price_gbp"]
 
-            is_new_low = tonight_price <= baseline_min
-            is_meaningfully_below = tonight_price <= baseline_median * (1 - drop_pct_threshold)
+            if not tonight_price <= baseline_min:
+                continue
+            counts["new_low"] += 1
+
+            if not tonight_price <= baseline_median * (1 - drop_pct_threshold):
+                continue
+            counts["drop_ok"] += 1
 
             # Must beat this exact flight's own last flagged price for
             # *this product*, not merely tie it — otherwise a fare that
@@ -240,34 +283,36 @@ def detect(sweep_date, product, config=None):
             flagged_min_price = index_lookup.loc[key, flagged_col]
             if isinstance(flagged_min_price, pd.Series):
                 flagged_min_price = flagged_min_price.iloc[0]
-            already_flagged_this_low = pd.notna(flagged_min_price) and tonight_price >= flagged_min_price
+            if pd.notna(flagged_min_price) and tonight_price >= flagged_min_price:
+                continue
 
-            if is_new_low and is_meaningfully_below and not already_flagged_this_low:
-                flags.append(
-                    {
-                        "product": product,
-                        "flagged_at": sweep_date.isoformat(),
-                        "origin_airport": row["origin_airport"],
-                        "destination": row["destination"],
-                        "depart_date": _as_date_str(row["depart_date"]),
-                        "return_date": _as_date_str(row["return_date"]),
-                        "trip_type": row["trip_type"],
-                        "price_gbp": float(tonight_price),
-                        "prior_min_gbp": float(baseline_min),
-                        "prior_median_gbp": float(baseline_median),
-                        "drop_pct_vs_median": round(1 - (tonight_price / baseline_median), 3),
-                        "observation_count": int(obs_count),
-                        "airline": row["airline"],
-                        "flight_number": row["flight_number"],
-                    }
-                )
-                newly_flagged[key] = tonight_price
+            flags.append(
+                {
+                    "product": product,
+                    "flagged_at": sweep_date.isoformat(),
+                    "origin_airport": row["origin_airport"],
+                    "destination": row["destination"],
+                    "depart_date": _as_date_str(row["depart_date"]),
+                    "return_date": _as_date_str(row["return_date"]),
+                    "trip_type": row["trip_type"],
+                    "price_gbp": float(tonight_price),
+                    "prior_min_gbp": float(baseline_min),
+                    "prior_median_gbp": float(baseline_median),
+                    "drop_pct_vs_median": round(1 - (tonight_price / baseline_median), 3),
+                    "observation_count": int(obs_count),
+                    "airline": row["airline"],
+                    "flight_number": row["flight_number"],
+                }
+            )
+            newly_flagged[key] = tonight_price
+            counts["flagged"] += 1
 
     if newly_flagged:
         _record_flagged_prices(index_df, newly_flagged, flagged_col)
-        storage.save_index(index_df)
+        if persist:
+            storage.save_index(index_df)
 
-    return flags
+    return _finish(flags)
 
 
 def _record_flagged_prices(index_df, newly_flagged, flagged_col):

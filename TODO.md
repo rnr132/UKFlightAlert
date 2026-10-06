@@ -22,6 +22,12 @@ works well), then:
 When a "stop" reply arrives, remove that address from `NOTIFY_RECIPIENTS`
 the same way you add one (README, "Adding or removing a recipient").
 
+`REPLY_TO` is also where the **weekly owner report** goes (first one:
+Monday 12 Oct; preview any time with `python scripts/notify.py --owner-report`).
+It says how the week went and where fares dropped out of detection, so a
+quiet week can be told apart from a broken one. If a Monday passes with no
+report, the nightly job has stopped — check the Actions tab.
+
 ---
 
 ## Watch the first few real nights of Weekend/Holiday Deals (2026-09-19)

@@ -1277,3 +1277,85 @@ out under this code, and `REPLY_TO` isn't set yet (TODO.md) — the first
 real send will warn and carry no unsubscribe line until it is. Sending a
 real test email is deliberately left to the owner (`--test you@x.com`).
 Removal on a "stop" reply is manual, same loop as adding (README).
+
+## Seeing what the system did before recipients do (2026-10-06)
+
+The pattern behind most rule changes in this file: a problem (duplicate
+BRE flags, the 1-night trips, the 82-day alert) was found by someone
+*reading an email that had already gone out*. Fine with one recipient;
+not with strangers on the list. And the opposite failure is invisible
+too — a quiet system looks exactly like a broken one. Between 09-25 and
+10-05 the pipeline sent **1 alert in 11 nights** (all sweeps green, zero
+failed API calls), and nothing on disk could say whether that was
+"nothing cheap" or "something over-filtering".
+
+**What the silence actually was (traced by hand first, then built in).**
+On the 10-05 sweep, 1,887 fares changed price; only 445 depart within 21
+days. Of those, 54 are a weekend shape and 215 a holiday one. The "seen
+on 5+ nights" rule then keeps 15 and 39 — cutting roughly 72% and 82% of
+what reaches it — and none of those cleared the new-low-and-20%-below
+test that night. So the dominant cut after trip shape and lead time is
+the observation-count rule, with "new low" next; the price threshold
+itself was almost never the thing deciding. Replaying the 4 nights still
+on disk under the 2026-10-04 settings (20%, Fri→Mon) gives about 5 flags
+against the 1 actually sent under the old 30% bar — a volume that reads
+as "an email on roughly half the nights", not a flood and not silence.
+(An approximation: it judges old nights against today's index. Stated in
+the tool, not hidden.)
+
+**Built:**
+
+- **`detect.detect(..., stats=, persist=)`.** `stats` is filled with the
+  `FUNNEL_STAGES` counts — how many of tonight's changed fares survived
+  each gate — and `sweep.py` records them per product in
+  `data/heartbeat.jsonl`. `persist=False` makes a run strictly read-only.
+- **Gate reorder.** The gates now run shape → lead time → seen-enough →
+  history → new low → drop → not-already-flagged, so the counts read as a
+  funnel instead of reflecting whichever test happened to run first. They
+  are ANDed, so this cannot change which fares flag; checked rather than
+  assumed — old and new `detect()` compared on every real night on disk,
+  under the current settings and four deliberately loosened ones (one
+  producing 268 flags), **527 flags identical**.
+- **`scripts/replay.py`.** Re-runs detection on the real nights still on
+  disk under current settings or `--set detection.x=y` overrides, prints
+  the funnel per night/product and the flags that would have fired next
+  to what current settings flag. Read-only by construction
+  (`persist=False`) and verified so (index frame compared before/after).
+  Refuses a setting name that doesn't exist: a typo'd name would
+  otherwise quietly replay the *current* behaviour and read as "that
+  change makes no difference". Its tests found a real hole in my first
+  version — `--set detection=0.3` was accepted and would have replaced
+  the whole section with a number.
+- **Weekly owner report** (`notify.owner_report_weekday`, Monday),
+  emailed to the `REPLY_TO` inbox only: sweep health, digests sent, and
+  the funnel summed over the week with the tightest *tunable* gate named
+  next to the setting that controls it. **Weekly, not the nightly "nothing
+  fired because…" note first proposed** — most nights send nothing, and a
+  nightly "nothing happened" email is noise nobody reads. It is sent by
+  the same job it reports on, so it can't announce that job's death: a
+  Monday with no report is the alarm, and the report's last line says so.
+  It runs in a `finally` around the digest step (a failed night is when
+  it's most wanted), is idempotent per day, and is auxiliary by design —
+  any failure prints a one-line warning and can't affect the digest.
+
+**Known limits:** only the nights whose raw delta still exists can be
+replayed (~4), because "which fares changed on which night" isn't
+recoverable from the compacted monthly files, and `observation_count`
+can't be reconstructed for old nights since unchanged-price sightings
+were never stored (PLAN.md's Phase 2 section). The nightly funnel in the
+heartbeat is the faithful long-run record; replay is the preview.
+`has_history` currently equals `seen_enough` on every real night (5+
+sightings implies history exists); kept as its own stage because the
+lookback window can in principle empty it.
+
+**Verified:** 29 new pytest cases across the funnel, read-only mode,
+replay and the owner report, then mutation-checked — five deliberate
+breakages (a funnel stage that stops counting, `persist=False` writing
+anyway, the owner report sending on every weekday, the report moved off
+the failure path, the typo guard removed), each caught by a specific
+test; one of my own mutations was invalid Python and told me nothing, so
+it was redone as a real one rather than counted. The owner report was
+also rendered from the real heartbeats and matches the facts found by
+hand (7 nights, 0 failed calls, 1 digest, 3 recipients). Not yet seen:
+a real report email (needs `REPLY_TO`, TODO.md) or a funnel in a real
+heartbeat (starts with the next sweep).

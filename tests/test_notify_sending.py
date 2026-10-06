@@ -15,75 +15,19 @@ import pytest
 
 import detect
 import notify
-
-CFG = {
-    "notify": {
-        "smtp_host": "smtp.test",
-        "smtp_port": 587,
-        "smtp_username": "resend",
-        "from_address": "deals@example.test",
-        "from_name": "London Flight Deals",
-        "password_env_var": "SMTP_PASSWORD",
-        "recipients_env_var": "NOTIFY_RECIPIENTS",
-        "reply_to_env_var": "REPLY_TO",
-    },
-    "detection": {"drop_pct_threshold": 0.2},
-    "monitoring": {"staleness_warning_hours": 36},
-}
+from helpers import CFG, FakeSMTP, sent_messages
 
 AS_OF = date(2026, 10, 6)
 
 
-class FakeSMTP:
-    """Records what a real SMTP session would have been asked to do."""
-
-    instances = []
-    refuse = set()  # addresses that get a 550 for the recipient
-    drop_after = None  # raise SMTPServerDisconnected on the Nth sendmail (0-based)
-
-    def __init__(self, host, port):
-        self.sent = []  # (envelope_from, [envelope_to], raw_message)
-        self.calls = 0
-        FakeSMTP.instances.append(self)
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        return False
-
-    def starttls(self):
-        pass
-
-    def login(self, user, password):
-        pass
-
-    def sendmail(self, from_addr, to_addrs, raw):
-        n = self.calls
-        self.calls += 1
-        if FakeSMTP.drop_after is not None and n >= FakeSMTP.drop_after:
-            raise smtplib.SMTPServerDisconnected("connection unexpectedly closed")
-        refused = {a: (550, b"mailbox unavailable") for a in to_addrs if a in FakeSMTP.refuse}
-        if refused:
-            raise smtplib.SMTPRecipientsRefused(refused)
-        self.sent.append((from_addr, list(to_addrs), raw))
-        return {}
-
-
 @pytest.fixture(autouse=True)
 def fake_smtp(monkeypatch):
-    FakeSMTP.instances = []
-    FakeSMTP.refuse = set()
-    FakeSMTP.drop_after = None
+    FakeSMTP.reset()
     monkeypatch.setattr(smtplib, "SMTP", FakeSMTP)
     monkeypatch.setattr(notify.time, "sleep", lambda s: None)
     monkeypatch.setenv("SMTP_PASSWORD", "test-key")
     monkeypatch.delenv("REPLY_TO", raising=False)
     monkeypatch.delenv("NOTIFY_RECIPIENTS", raising=False)
-
-
-def sent_messages():
-    return [m for inst in FakeSMTP.instances for m in inst.sent]
 
 
 # --- one message per recipient -------------------------------------------------

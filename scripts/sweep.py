@@ -374,8 +374,14 @@ def real_sweep(config, origin_filter=None):
     # detect.py's module docstring for why one general detector became two
     # hyper-specialized ones.
     flags_by_product = {}
+    funnel_by_product = {}
     for product in sorted(detect.PRODUCTS):
-        flags = detect.detect(sweep_date, product, config=config)
+        # stats: where tonight's changed fares dropped out, gate by gate
+        # (detect.FUNNEL_STAGES) — recorded in the heartbeat so a silent
+        # night has an answer on disk, not just "0 flagged".
+        stats = {}
+        flags = detect.detect(sweep_date, product, config=config, stats=stats)
+        funnel_by_product[product] = stats
         # Booking-link enrichment lives here, not inside detect.py, which
         # documents itself as making no API calls — see booking_links.py's
         # module docstring. Never fails the run: a conversion problem
@@ -407,6 +413,7 @@ def real_sweep(config, origin_filter=None):
         "rollup": rollup_result,
         "flags_found": sum(len(f) for f in flags_by_product.values()),
         "flags_found_by_product": {p: len(f) for p, f in flags_by_product.items()},
+        "funnel": funnel_by_product,
     }
     append_heartbeat(heartbeat)
 

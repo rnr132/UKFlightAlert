@@ -37,6 +37,12 @@ the To: line), with a Reply-To and List-Unsubscribe pointing at the inbox
 in the REPLY_TO secret, and an "x of y delivered" record in the notify
 heartbeat. A re-run the same day only sends fares not already emailed.
 
+On notify.owner_report_weekday it also emails the *owner* (the REPLY_TO
+inbox, never the recipient list) a weekly summary: sweep health, what was
+sent, and where the week's fares dropped out of detection's funnel — so a
+quiet system can be told apart from a broken one without reading an
+email that was already sent to everyone.
+
 Usage:
     python scripts/notify.py                  # send if either product has something new tonight
     python scripts/notify.py --dry-run        # print the text version, write an HTML preview file, send nothing
@@ -810,9 +816,156 @@ def _already_sent_flag_ids(as_of):
     return ids, everything
 
 
-def run(config=None, as_of=None, dry_run=False, test_address=None, resend=False):
-    config = config or load_config()
-    as_of = as_of or datetime.now(timezone.utc).date()
+SWEEP_HEARTBEAT_PATH = REPO_ROOT / "data" / "heartbeat.jsonl"
+
+_OWNER_FUNNEL_LABELS = (
+    ("changed", "fares whose price changed"),
+    ("right_shape", "the right trip shape"),
+    ("within_lead_cap", "departing soon enough"),
+    ("seen_enough", "seen on enough nights"),
+    ("has_history", "have history to compare"),
+    ("new_low", "at a new low"),
+    ("drop_ok", "far enough below typical"),
+    ("flagged", "flagged"),
+)
+
+# The gates a person can actually retune, and the setting behind each.
+_TUNABLE_GATES = {
+    "within_lead_cap": "detection.max_lead_days",
+    "seen_enough": "detection.min_observations",
+    "new_low": "detection.new_low_lookback_days",
+    "drop_ok": "detection.drop_pct_threshold",
+}
+
+
+def _read_jsonl(path):
+    if not path.exists():
+        return []
+    with open(path) as f:
+        return [json.loads(line) for line in f if line.strip()]
+
+
+def build_owner_report(as_of, days=7, sweeps=None, sends=None):
+    """Plain-text weekly summary for the owner only — never the recipient
+    list. Exists because the only way the owner found out about a rule
+    problem so far was reading a sent email, and a quiet system looks
+    identical to a broken one. Reads the two heartbeat files (pass
+    `sweeps`/`sends` to test without them).
+
+    The report is sent by the same nightly job it describes, so it can't
+    report its own death: a Monday with no report IS the alarm, and the
+    last line of the report says so."""
+    sweeps = _read_jsonl(SWEEP_HEARTBEAT_PATH) if sweeps is None else sweeps
+    sends = _read_jsonl(NOTIFY_HEARTBEAT_PATH) if sends is None else sends
+    start = as_of - timedelta(days=days - 1)
+
+    def within(iso):
+        return start <= date.fromisoformat(iso) <= as_of
+
+    week = [h for h in sweeps if within(h["sweep_date"])]
+    sweep_nights = {h["sweep_date"] for h in week}
+    sent_records = [s for s in sends if s.get("as_of") and within(s["as_of"]) and s.get("sent")]
+    sent_nights = {s["as_of"] for s in sent_records}
+    recipients = next((s["recipients_count"] for s in reversed(sends) if s.get("recipients_count")), None)
+
+    lines = [f"London Flight Deals — owner report, week to {as_of.strftime('%a')} {_fmt_date(as_of.isoformat())}", ""]
+    lines.append("HEALTH")
+    if not week:
+        lines.append("  NO SWEEPS RECORDED THIS WEEK — check the Actions tab.")
+    else:
+        failed_calls = sum(h.get("calls_failed", 0) for h in week)
+        lines.append(f"  Sweeps: {len(sweep_nights)} night(s) ran, {failed_calls} failed API call(s)")
+    weekend_sent = sum(s.get("weekend_count", 0) for s in sent_records)
+    holiday_sent = sum(s.get("holiday_count", 0) for s in sent_records)
+    failed_sends = sum(s.get("failed_count", 0) for s in sent_records)
+    to_whom = f" to {recipients} recipient(s)" if recipients else ""
+    lines.append(
+        f"  Digests: sent on {len(sent_nights)} night(s){to_whom} — {weekend_sent} weekend and "
+        f"{holiday_sent} holiday fare(s), {failed_sends} failed send(s)"
+    )
+    if week:
+        lines.append(f"  Quiet nights: {max(0, len(sweep_nights) - len(sent_nights))} of {len(sweep_nights)} had nothing new to send")
+    lines.append("")
+
+    with_funnel = [h for h in week if h.get("funnel")]
+    lines.append("WHERE FARES DROPPED OUT (summed over the week's sweeps)")
+    if not with_funnel:
+        lines.append("  No funnel recorded yet — it starts with the first sweep after this shipped.")
+        totals = {}
+    else:
+        totals = {
+            p: {s: sum(h["funnel"].get(p, {}).get(s, 0) for h in with_funnel) for s, _ in _OWNER_FUNNEL_LABELS}
+            for p in sorted(detect.PRODUCTS)
+        }
+        products = sorted(totals)
+        lines.append(f"  {'':<30}" + "".join(f"{p:>10}" for p in products))
+        for stage, label in _OWNER_FUNNEL_LABELS:
+            lines.append(f"  {label:<30}" + "".join(f"{totals[p][stage]:>10,}" for p in products))
+        if len(with_funnel) < len(week):
+            lines.append(f"  (funnel recorded for {len(with_funnel)} of {len(week)} sweeps this week)")
+    lines.append("")
+
+    if totals:
+        order = [s for s, _ in _OWNER_FUNNEL_LABELS]
+        for p in sorted(totals):
+            tightest = None
+            for stage, setting in _TUNABLE_GATES.items():
+                prev = totals[p][order[order.index(stage) - 1]]
+                if prev <= 0:
+                    continue
+                kept = totals[p][stage] / prev
+                if tightest is None or kept < tightest[0]:
+                    tightest = (kept, stage, setting)
+            if tightest:
+                kept, stage, setting = tightest
+                label = dict(_OWNER_FUNNEL_LABELS)[stage]
+                lines.append(f"Tightest tunable gate for {p}: \"{label}\" kept {kept:.0%} of what reached it ({setting}).")
+        lines.append("Preview any change before making it:  python scripts/replay.py --set <setting>=<value>")
+        lines.append("")
+
+    lines.append("If this report doesn't arrive on a Monday, the nightly job has stopped — check the Actions tab.")
+    return "\n".join(lines)
+
+
+def _owner_report_already_sent(as_of):
+    return any(
+        rec.get("owner_report_sent") and rec.get("as_of") == as_of.isoformat()
+        for rec in _read_jsonl(NOTIFY_HEARTBEAT_PATH)
+    )
+
+
+def send_owner_report_if_due(config, as_of, reply_to):
+    """On notify.owner_report_weekday, email build_owner_report() to the
+    REPLY_TO inbox (the one address that's the owner's by definition).
+    Auxiliary by design: any failure prints a one-line warning with no
+    detail and moves on, so a problem here can never stop the digest.
+    Returns True if one was sent."""
+    weekday = config["notify"].get("owner_report_weekday")
+    if weekday is None or as_of.weekday() != weekday:
+        return False
+    if not reply_to:
+        print(f"notify: owner report is due but {config['notify']['reply_to_env_var']} isn't set — nowhere to send it.")
+        return False
+    if _owner_report_already_sent(as_of):
+        return False
+    try:
+        body = build_owner_report(as_of)
+        subject = f"London Flight Deals — owner report, week to {_fmt_date(as_of.isoformat())}"
+        from_address, _ = _from_parts(config)
+        with _smtp_session(config) as server:
+            msg = _build_message(config, subject, body, None, reply_to)
+            server.sendmail(from_address, [reply_to], msg.as_string())
+    except Exception as e:  # noqa: BLE001 — auxiliary; must never fail the digest step
+        print(f"notify: owner report NOT sent ({type(e).__name__}) — the digest is unaffected.")
+        return False
+    append_notify_heartbeat(
+        {"run_at": datetime.now(timezone.utc).isoformat(), "as_of": as_of.isoformat(), "owner_report_sent": True}
+    )
+    print("notify: owner report sent.")
+    return True
+
+
+def _run_digest(config, as_of, dry_run, test_address, resend):
     # --dry-run/--test are manual and exploratory; only the unattended
     # path (what the nightly workflow actually calls) gets a heartbeat
     # entry, a staleness check, or the already-sent filter below.
@@ -949,11 +1102,29 @@ def run(config=None, as_of=None, dry_run=False, test_address=None, resend=False)
     }
 
 
+def run(config=None, as_of=None, dry_run=False, test_address=None, resend=False):
+    config = config or load_config()
+    as_of = as_of or datetime.now(timezone.utc).date()
+    is_real_run = not dry_run and not test_address
+    try:
+        return _run_digest(config, as_of, dry_run, test_address, resend)
+    finally:
+        # In `finally` on purpose: the nights the digest step fails or
+        # raises are exactly the nights the owner most wants this report.
+        if is_real_run:
+            send_owner_report_if_due(config, as_of, _load_reply_to(config))
+
+
 def main():
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument("--dry-run", action="store_true", help="Print the text version, write an HTML preview file, send nothing.")
+    parser.add_argument(
+        "--owner-report",
+        action="store_true",
+        help="Print the weekly owner report for --date (default today) and exit — sends nothing.",
+    )
     parser.add_argument(
         "--test",
         metavar="EMAIL",
@@ -972,6 +1143,9 @@ def main():
     args = parser.parse_args()
 
     as_of = date.fromisoformat(args.date) if args.date else None
+    if args.owner_report:
+        print(build_owner_report(as_of or datetime.now(timezone.utc).date()))
+        return
     result = run(as_of=as_of, dry_run=args.dry_run, test_address=args.test, resend=args.resend)
     print(result)
 
