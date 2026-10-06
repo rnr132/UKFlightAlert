@@ -65,6 +65,10 @@ jobs:
         env:
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           NOTIFY_RECIPIENTS: ${{ secrets.NOTIFY_RECIPIENTS }}
+          # Optional: an unset secret arrives as an empty string, which
+          # notify.py treats as "not configured" (digest still sends, with
+          # a warning and no unsubscribe line).
+          REPLY_TO: ${{ secrets.REPLY_TO }}
         run: python scripts/notify.py
 
       - name: Commit data

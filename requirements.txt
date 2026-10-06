@@ -4,3 +4,4 @@ pandas==2.3.3
 pyarrow==21.0.0
 airportsdata==20250909
 pycountry-convert==0.7.2
+pytest==8.4.2

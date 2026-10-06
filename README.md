@@ -1,12 +1,16 @@
 # Flight Deal Scanner
 
 A nightly job that sweeps flight prices from 10 UK airports across a
-rolling ~18-month horizon into a growing price history, and flags flights
-that have genuinely dropped against their own recent trend. No alerting,
-no front end, no per-user config yet — see [Brief.md](Brief.md) for
-Phase 1's original scope, and [PLAN.md](PLAN.md) for the architecture and
-every decision behind both phases (including several corrections made
-after comparing assumptions against the live API).
+rolling ~18-month horizon into a growing price history, then emails a
+small list of people the fares that have genuinely dropped against their
+own recent trend — but only the two kinds someone can actually act on at
+short notice: **Weekend Deals** (a Friday- or Saturday-to-Sunday-or-Monday
+trip) and **Holiday Deals** (a trip during, or a couple of days either
+side of, a London school holiday). Free to run end to end: GitHub
+Actions, the repo as its database, and Resend's free email tier. See
+[Brief.md](Brief.md) for the original scope and [PLAN.md](PLAN.md) for the
+architecture and every decision behind it, including the many corrections
+made after comparing assumptions against live data.
 
 ## What this is, and isn't
 
@@ -14,24 +18,30 @@ after comparing assumptions against the live API).
   people's searches, not live inventory. A genuine mistake fare is gone
   long before this could ever surface it. What survives that latency is
   *structural* cheapness — a capacity dump, a new route, genuine off-peak
-  — the kind of thing still true a week later. Any future alerting should
-  read as "this route looks unusually cheap right now," weekly cadence,
-  never "book this exact seat."
+  — the kind of thing still true a week later. The email says so itself:
+  a nightly signal, never "book this exact seat."
 - **Detection compares a flight against its own history, not a season.**
-  A route is only scored once it's been observed on 5+ distinct nights,
-  and flags only when tonight's price is both a genuine new low and well
-  below its own recent median (`scripts/detect.py` — see PLAN.md's Phase 2
-  section). Comparing against "is this normal for April" needs having seen
-  a previous April — about 12 months of history, not weeks — so that kind
-  of seasonal comparison isn't attempted yet.
-- **Detection finds; delivery is wired in but not yet live to real
-  people.** `scripts/notify.py` builds a styled weekly email digest
-  (via [Resend](https://resend.com)) and runs as part of the nightly
-  workflow — but until `SMTP_PASSWORD`/`NOTIFY_RECIPIENTS` exist as
-  GitHub Secrets (see below), a real digest day just fails loudly rather
-  than silently doing nothing. Test sends to a single chosen address
-  have already gone out successfully; the real recipient list hasn't
-  been added yet.
+  A fare is only considered once it's been seen on 5+ distinct nights. It
+  is flagged when tonight's price is a new low for that exact flight
+  (within a bounded lookback window) *and* well below its own recent
+  median, the trip is the right shape for one of the two products, and it
+  departs within a few weeks (`scripts/detect.py` — see PLAN.md's Phase 2
+  section for why each rule exists). Every threshold lives in the
+  `detection` block of `config/sweep.yaml`. Comparing against "is this
+  normal for April" needs having seen a previous April — about 12 months
+  of history, not weeks — so that kind of seasonal comparison isn't
+  attempted yet.
+- **Delivery is live.** `scripts/notify.py` emails a styled digest (via
+  [Resend](https://resend.com)) on any night something new clears the
+  bar, and nothing on a quiet night. Each recipient gets their own
+  separate message, so nobody sees anyone else's address, with a
+  Reply-To so people can ask to stop.
+- **Joining is manual on purpose.** People sign up at
+  [flightalert.rohit-nair.com](https://flightalert.rohit-nair.com) — a
+  static page (its own repo) in front of a Google Form. Nothing from it
+  reaches this repo automatically: the owner reviews signups and adds
+  addresses by hand ([below](#adding-or-removing-a-recipient)), so a
+  stranger's submission never becomes a recipient on its own.
 - **The repo is the database.** There's no server. Every night's prices
   (and any flags) are committed back into `data/` by the GitHub Action
   itself.
@@ -83,13 +93,12 @@ noticed whenever someone happens to check the Actions tab.
 The repo must be **public** for this to run on free, unlimited Actions
 minutes — see [Brief.md](Brief.md) for why.
 
-### 4. Weekly digest secrets
+### 4. Email secrets
 
-The workflow's "Send weekly digest" step runs every night but only
-actually sends on `notify.digest_weekday` (Friday — chosen so it lands
-with the weekend still ahead, not behind) — every other night it exits
-cleanly with nothing to do. It needs two more repository secrets, same
-place as above:
+The workflow's "Send nightly digest" step runs every night and sends only
+when either product has something new that hasn't already been emailed
+that day — a quiet night exits cleanly with nothing to do. It reads three
+more repository secrets, same place as above:
 
 - `SMTP_PASSWORD` — a [Resend](https://resend.com) API key. The SMTP
   username and sender address aren't secrets, so they live in
@@ -97,11 +106,38 @@ place as above:
   section for why Resend, not Gmail/Yahoo).
 - `NOTIFY_RECIPIENTS` — comma-separated real email addresses. Never
   committed anywhere, for the obvious reason.
+- `REPLY_TO` — optional but recommended: the one inbox that replies and
+  "say stop" requests land in. The sending domain can't receive mail
+  (`flightalert.rohit-nair.com` points at the signup page), so without
+  this a reply goes nowhere and digests carry no unsubscribe line.
+  Recipients can see this address in the Reply-To header, so use one
+  you're comfortable showing them.
 
-Until both exist, a real digest day fails the step loudly (missing
-credentials are checked at startup, not partway through an SMTP call) —
-which is deliberate: a silent skip would be worse than a red run, same
-reasoning as the Actions-failure email above.
+If `SMTP_PASSWORD` or `NOTIFY_RECIPIENTS` is missing on a night there's
+something to send, the step fails loudly (credentials are checked at
+startup, not partway through an SMTP call) — deliberate: a silent skip
+would be worse than a red run, same reasoning as the Actions-failure
+email above. A missing `REPLY_TO` only prints a warning, since it
+shouldn't be able to stop the digest.
+
+#### Adding or removing a recipient
+
+GitHub Secrets are write-only — once set, a value can't be read back — so
+your local `.env` is the only readable copy of the list. To change it:
+
+1. Edit the `NOTIFY_RECIPIENTS=` line in `.env` (comma-separated; spaces
+   after commas are fine). Duplicates and malformed entries are dropped
+   at send time, with a count — never the addresses — in the run log.
+2. Push it to the secret yourself, from the project folder:
+   ```bash
+   gh secret set NOTIFY_RECIPIENTS --body "$(grep '^NOTIFY_RECIPIENTS=' .env | cut -d= -f2-)"
+   ```
+3. Confirm with `gh secret list` — the updated time should be now. No
+   restart is needed; the next run reads the secret fresh.
+
+A "stop" reply is honoured the same way: delete the address and repeat
+steps 2–3. Moving credentials into GitHub is deliberately a manual,
+human step — nothing in this repo does it for you.
 
 ## Running it
 
@@ -119,12 +155,14 @@ python scripts/sweep.py
 python scripts/storage.py --stats
 python scripts/storage.py --compact --rollup
 python scripts/detect.py --date 2026-09-15   # re-check a specific past night
+python scripts/detect.py --product weekend   # just one of the two products
 
-# Weekly digest email -- also runs automatically as part of the nightly
-# workflow now, but only sends on notify.digest_weekday and only once
-# SMTP_PASSWORD/NOTIFY_RECIPIENTS exist as GitHub Secrets
-python scripts/notify.py --dry-run           # build it, print it, send nothing
-python scripts/notify.py --test you@x.com    # ONE real email, for format review
+# Nightly digest email -- also runs automatically as part of the nightly
+# workflow; needs SMTP_PASSWORD/NOTIFY_RECIPIENTS (and ideally REPLY_TO)
+python scripts/notify.py --dry-run                     # build it, print it, send nothing
+python scripts/notify.py --dry-run --date 2026-10-02   # preview a past night that had flags
+python scripts/notify.py --test you@x.com              # ONE real email, for format review
+python scripts/notify.py --date 2026-10-02 --resend    # replay a night, even fares already sent
 ```
 
 A sweep exits non-zero if any origin-month call ultimately failed after
@@ -149,14 +187,19 @@ data/
   index/latest.parquet       last-known price hash + observation count per
                              route — how a fresh checkout knows both "what
                              changed" and "is this route eligible to score"
-  flags/YYYY-MM-DD.jsonl     deals detect.py found that night — only
-                             created on nights with something to say
+  flags/<product>/YYYY-MM-DD.jsonl
+                             deals detect.py found that night, in a
+                             weekend/ or holiday/ folder — only created
+                             on nights with something to say
   heartbeat.jsonl            one line per run: rows fetched/changed,
                              failures, cheapest fare seen, flags found
   notify_heartbeat.jsonl     one line per real notify.py run (not
-                             --dry-run/--test): sent or skipped, why, to
-                             how many — the same silent-gap protection
-                             as heartbeat.jsonl, for the digest send
+                             --dry-run/--test): sent or skipped, why, how
+                             many were delivered or failed, and which
+                             fares went out (so a same-day re-run can't
+                             email them twice). Never any addresses — the
+                             same silent-gap protection as
+                             heartbeat.jsonl, for the digest send
 ```
 
 Deltas exist because Parquet is compressed binary — a one-row change
@@ -209,12 +252,20 @@ PLAN.md                      architecture, every decision and why, what changed
 config/sweep.yaml            origins, horizon, endpoint, retention — no secrets
 scripts/
   config.py             shared config/path loading
-  sweep.py              fetch, throttle, retry, ingest, heartbeat
+  sweep.py              fetch, throttle, retry, ingest, detect, heartbeat
   storage.py            normalize, delta write, compaction, rollup
-  detect.py             deal detection — flags a genuine new low vs. own history
-  notify.py             weekly email digest, wired into the nightly Action (see above)
+  detect.py             deal detection — the two products' rules, vs. own history
+  booking_links.py      builds Aviasales search links and converts them to
+                        tracked partner links (the one network call outside
+                        sweep.py's fetch)
+  notify.py             nightly email digest, one message per recipient,
+                        wired into the nightly Action (see above)
+  places.py             airport code -> city/country/continent (offline)
+  airlines.py           airline code -> name (offline; vendored CSV)
+  school_holidays.py    London school-holiday windows the Holiday product uses
   check_action_pins.py  quarterly: is any SHA-pinned action behind its latest
                         release? opens a tracking issue if so (stdlib only)
+tests/                       pytest suite — `pytest` from the repo root
 .github/workflows/
   sweep.yml             the nightly Action
   check-action-pins.yml runs check_action_pins.py quarterly + on demand

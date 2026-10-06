@@ -32,18 +32,28 @@ constraint. HTML version: table-based layout, inline styles, no external
 images or fonts (2026-09-17), with a plain-text alternative in the same
 message, not HTML alone.
 
+Each recipient gets their own message (never one message with everyone on
+the To: line), with a Reply-To and List-Unsubscribe pointing at the inbox
+in the REPLY_TO secret, and an "x of y delivered" record in the notify
+heartbeat. A re-run the same day only sends fares not already emailed.
+
 Usage:
     python scripts/notify.py                  # send if either product has something new tonight
     python scripts/notify.py --dry-run        # print the text version, write an HTML preview file, send nothing
+    python scripts/notify.py --dry-run --date 2026-10-02   # preview a past night that had flags
     python scripts/notify.py --test you@x.com # ONE real email to a single address, ignoring the real recipient list — for reviewing the format before it ever reaches anyone else
+    python scripts/notify.py --resend         # send even fares already emailed earlier for this date
 """
 import argparse
 import html
 import json
 import os
+import re
 import smtplib
-from collections import defaultdict
-from datetime import date, datetime, timezone
+import time
+from collections import Counter, defaultdict
+from contextlib import contextmanager
+from datetime import date, datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.utils import formataddr
@@ -281,12 +291,16 @@ def _render_text_section(product, flags, min_drop_pct):
     return lines, count
 
 
-def build_digest_text(weekend_flags, holiday_flags, as_of, min_drop_pct):
+def build_digest_text(weekend_flags, holiday_flags, as_of, min_drop_pct, can_unsubscribe=False):
     """Plain-text digest body combining both products' sections, or
     (None, 0, 0) if neither has anything to say tonight. This is the
     multipart/alternative fallback for clients/screen readers that don't
     render HTML — not a lesser version, a different one, so it's built
-    directly rather than stripped-down from the HTML."""
+    directly rather than stripped-down from the HTML.
+
+    can_unsubscribe adds the "reply to stop" line — only when a Reply-To
+    inbox is actually configured, since promising that with nowhere for
+    replies to land would be worse than saying nothing."""
     weekend_lines, weekend_count = _render_text_section("weekend", weekend_flags, min_drop_pct)
     holiday_lines, holiday_count = _render_text_section("holiday", holiday_flags, min_drop_pct)
     if weekend_lines is None and holiday_lines is None:
@@ -302,6 +316,9 @@ def build_digest_text(weekend_flags, holiday_flags, as_of, min_drop_pct):
         "data can be a few days old. If a route above still looks good, "
         "worth checking live before booking."
     )
+    if can_unsubscribe:
+        lines.append("")
+        lines.append(_UNSUBSCRIBE_LINE)
     return "\n".join(lines), weekend_count, holiday_count
 
 
@@ -462,12 +479,12 @@ def _render_html_section(product, flags, min_drop_pct, is_first):
     return header + sections, count
 
 
-def build_digest_html(weekend_flags, holiday_flags, as_of, min_drop_pct):
+def build_digest_html(weekend_flags, holiday_flags, as_of, min_drop_pct, can_unsubscribe=False):
     """HTML digest body (a complete standalone document) combining both
     products' sections, or (None, 0, 0) if neither has anything to say
     tonight — same eligibility/grouping/sort as the text version, via the
     same _prepare_section() so the two can never disagree about which
-    fares qualify."""
+    fares qualify. can_unsubscribe: see build_digest_text()."""
     sections_html = []
     counts = {}
     for product in ("weekend", "holiday"):
@@ -485,6 +502,7 @@ def build_digest_html(weekend_flags, holiday_flags, as_of, min_drop_pct):
     fare_word = "fare" if total == 1 else "fares"
     date_label = _fmt_date(as_of.isoformat())
     sections = "".join(sections_html)
+    unsubscribe_html = f"<br><br>{_esc(_UNSUBSCRIBE_LINE)}" if can_unsubscribe else ""
 
     html_doc = f"""<!doctype html>
 <html lang="en">
@@ -515,7 +533,7 @@ def build_digest_html(weekend_flags, holiday_flags, as_of, min_drop_pct):
         </td></tr>
         <tr><td style="background:#ffffff;padding:8px 24px 28px;border-radius:0 0 12px 12px;">
           <p style="margin:20px 0 0;font-size:12px;color:#94a3b8;line-height:1.6;border-top:1px solid #e2e8f0;padding-top:16px;font-family:{_FONT_STACK};">
-            This is a nightly signal, not a real-time alert &mdash; the underlying data can be a few days old. If a route above still looks good, worth checking live before booking.
+            This is a nightly signal, not a real-time alert &mdash; the underlying data can be a few days old. If a route above still looks good, worth checking live before booking.{unsubscribe_html}
           </p>
         </td></tr>
       </table>
@@ -526,12 +544,81 @@ def build_digest_html(weekend_flags, holiday_flags, as_of, min_drop_pct):
     return html_doc, weekend_count, holiday_count
 
 
+# One address, no whitespace/commas/semicolons/angle brackets/quotes. Not a
+# full RFC 5322 parser — just enough that a pasted-in value can't smuggle in
+# a second address or a header line break, since both the recipient list
+# (copied by hand out of a Google Sheet) and REPLY_TO end up in headers.
+_ADDRESS_RE = re.compile(r"^[^@\s,;<>\"]+@[^@\s,;<>\"]+\.[^@\s,;<>\"]+$")
+
+# Resend allows 2 requests/second by default; stay comfortably under it.
+_SEND_INTERVAL_SECONDS = 0.6
+
+_UNSUBSCRIBE_LINE = "Don't want these emails? Just reply to this one and say stop."
+
+
+def _valid_address(addr):
+    return bool(_ADDRESS_RE.match(addr))
+
+
 def _load_recipients(config):
+    """NOTIFY_RECIPIENTS -> a clean list: malformed entries and
+    (case-insensitive) duplicates dropped. The public signup page makes
+    both likely — someone signs up twice, or a stray space/quote comes
+    along when an address is pasted out of the Sheet. Counts are printed,
+    addresses never are: Actions logs on a public repo are world-readable."""
     raw = os.environ.get(config["notify"]["recipients_env_var"], "")
-    return [r.strip() for r in raw.split(",") if r.strip()]
+    seen, recipients = set(), []
+    malformed = duplicates = 0
+    for entry in raw.split(","):
+        addr = entry.strip()
+        if not addr:
+            continue
+        if not _valid_address(addr):
+            malformed += 1
+            continue
+        if addr.lower() in seen:
+            duplicates += 1
+            continue
+        seen.add(addr.lower())
+        recipients.append(addr)
+    if malformed or duplicates:
+        print(
+            f"notify: recipient list cleanup — skipped {malformed} malformed "
+            f"and {duplicates} duplicate entries (addresses not printed)."
+        )
+    return recipients
 
 
-def send_email(config, subject, text_body, html_body, recipients):
+def _load_reply_to(config):
+    """The inbox replies (and unsubscribe requests) go to, from the env var
+    named in notify.reply_to_env_var — a secret, not config, because it's a
+    personal address and this repo is public. None if unset or malformed.
+    The sending domain has no MX record (flightalert.rohit-nair.com
+    CNAMEs to Vercel, and a CNAME can't coexist with one), so without this
+    a reply to londondeals@... has nowhere to land."""
+    var = config["notify"].get("reply_to_env_var")
+    raw = os.environ.get(var, "").strip() if var else ""
+    if not raw:
+        return None
+    if not _valid_address(raw):
+        print(f"notify: {var} is set but isn't a single valid email address — ignoring it (value not printed).")
+        return None
+    return raw
+
+
+def _from_parts(config):
+    from_address = config["notify"]["from_address"]
+    from_name = config["notify"].get("from_name")
+    # formataddr, not an f-string, so a name with a space (or anything
+    # that needs quoting/escaping) always produces a valid header — the
+    # bare address is what still goes to sendmail() as the SMTP envelope
+    # sender, which is a separate thing from this display name.
+    from_header = formataddr((from_name, from_address)) if from_name else from_address
+    return from_address, from_header
+
+
+@contextmanager
+def _smtp_session(config):
     # Resend's SMTP model splits "login identity" from "sender identity"
     # (2026-09-17 — see PLAN.md's delivery section): smtp_username is a
     # fixed literal, not a secret, so it lives in config/sweep.yaml like
@@ -546,31 +633,77 @@ def send_email(config, subject, text_body, html_body, recipients):
             f"workflow. Failing here, at startup, rather than deep inside "
             f"an SMTP call."
         )
-    username = config["notify"]["smtp_username"]
-    from_address = config["notify"]["from_address"]
-    from_name = config["notify"].get("from_name")
-    # formataddr, not an f-string, so a name with a space (or anything
-    # that needs quoting/escaping) always produces a valid header — the
-    # bare address is what still goes to sendmail() below as the SMTP
-    # envelope sender, which is a separate thing from this display name.
-    from_header = formataddr((from_name, from_address)) if from_name else from_address
-
-    # multipart/alternative, text first then HTML: RFC 2046 has the client
-    # render the *last* part it understands, so this prefers HTML where
-    # supported and falls back to plain text everywhere else (older
-    # clients, screen readers, "always show plain text" settings) rather
-    # than sending HTML-only and leaving those with nothing readable.
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = subject
-    msg["From"] = from_header
-    msg["To"] = ", ".join(recipients)
-    msg.attach(MIMEText(text_body, "plain", "utf-8"))
-    msg.attach(MIMEText(html_body, "html", "utf-8"))
-
     with smtplib.SMTP(config["notify"]["smtp_host"], config["notify"]["smtp_port"]) as server:
         server.starttls()
-        server.login(username, password)
-        server.sendmail(from_address, recipients, msg.as_string())
+        server.login(config["notify"]["smtp_username"], password)
+        yield server
+
+
+def _build_message(config, subject, text_body, html_body, to_address, reply_to=None):
+    """One message addressed to exactly one person. html_body=None gives a
+    plain-text-only message (the owner report); otherwise
+    multipart/alternative, text first then HTML: RFC 2046 has the client
+    render the *last* part it understands, so this prefers HTML where
+    supported and falls back to plain text everywhere else (older
+    clients, screen readers, "always show plain text" settings) rather
+    than sending HTML-only and leaving those with nothing readable."""
+    _, from_header = _from_parts(config)
+    if html_body is None:
+        msg = MIMEText(text_body, "plain", "utf-8")
+    else:
+        msg = MIMEMultipart("alternative")
+        msg.attach(MIMEText(text_body, "plain", "utf-8"))
+        msg.attach(MIMEText(html_body, "html", "utf-8"))
+    msg["Subject"] = subject
+    msg["From"] = from_header
+    msg["To"] = to_address
+    if reply_to:
+        msg["Reply-To"] = reply_to
+        # mailto form only: a one-click https form needs a live endpoint,
+        # and the signup page is static. Gmail/Apple Mail still surface
+        # this as an "Unsubscribe" control.
+        msg["List-Unsubscribe"] = f"<mailto:{reply_to}?subject=Unsubscribe>"
+    return msg
+
+
+def send_email(config, subject, text_body, html_body, recipients, reply_to=None):
+    """One separate message per recipient, never one message with everyone
+    on the To: line — that put every address in front of every other
+    recipient (found 2026-10-06, after the public signup page started
+    adding strangers alongside family). A failure for one recipient is
+    counted and the rest still go out; the caller decides what to do about
+    a nonzero `failed`.
+
+    Failure details are reduced to kinds and SMTP codes on purpose:
+    smtplib's own exception text includes the rejected address, and this
+    runs in a public repo's Actions log.
+
+    Returns {"sent": n, "failed": m, "failures": {kind: count}}."""
+    from_address, _ = _from_parts(config)
+    sent = 0
+    failures = Counter()
+    with _smtp_session(config) as server:
+        for i, addr in enumerate(recipients):
+            if i:
+                time.sleep(_SEND_INTERVAL_SECONDS)
+            msg = _build_message(config, subject, text_body, html_body, addr, reply_to)
+            try:
+                server.sendmail(from_address, [addr], msg.as_string())
+                sent += 1
+            except smtplib.SMTPRecipientsRefused as e:
+                codes = sorted({code for code, _msg in e.recipients.values()})
+                failures[f"recipient refused ({', '.join(map(str, codes))})"] += 1
+            except smtplib.SMTPResponseException as e:
+                failures[f"SMTP {e.smtp_code}"] += 1
+            except smtplib.SMTPServerDisconnected:
+                failures["connection lost"] += len(recipients) - i
+                break
+            except smtplib.SMTPException as e:
+                failures[type(e).__name__] += 1
+            except OSError as e:
+                failures[f"connection error ({type(e).__name__})"] += len(recipients) - i
+                break
+    return {"sent": sent, "failed": sum(failures.values()), "failures": dict(failures)}
 
 
 # ---------------------------------------------------------------------------
@@ -622,7 +755,7 @@ def check_notify_staleness(config, as_of=None):
         )
 
 
-def _notify_heartbeat_record(as_of, sent, reason, weekend_count, holiday_count, recipients_count=None):
+def _notify_heartbeat_record(as_of, sent, reason, weekend_count, holiday_count, **extra):
     record = {
         "run_at": datetime.now(timezone.utc).isoformat(),
         "as_of": as_of.isoformat(),
@@ -631,17 +764,58 @@ def _notify_heartbeat_record(as_of, sent, reason, weekend_count, holiday_count, 
         "weekend_count": weekend_count,
         "holiday_count": holiday_count,
     }
-    if recipients_count is not None:
-        record["recipients_count"] = recipients_count
+    record.update({k: v for k, v in extra.items() if v is not None})
     return record
 
 
-def run(config=None, as_of=None, dry_run=False, test_address=None):
+def _flag_id(product, f):
+    """Identity of one alerted fare: itinerary *and* price, so a same-day
+    re-flag of the same trip at a lower price counts as new (worth another
+    email) while an identical one doesn't. No personal data in it, so it's
+    safe to record in the committed heartbeat."""
+    return "|".join(
+        str(x)
+        for x in (product, f["origin_airport"], f["destination"], f["depart_date"], f["return_date"], f["price_gbp"])
+    )
+
+
+def _already_sent_flag_ids(as_of):
+    """(ids, everything_sent): which fares an earlier *real* run for this
+    same date already emailed, read back from the notify heartbeat.
+
+    Without this, re-running the workflow the same day (the documented way
+    to replay a missed night, PATTERNS.md) re-emailed every recipient the
+    identical digest, and per-recipient sending makes a partial-failure
+    retry more likely, not less. A same-day re-run that finds *new* flags
+    still sends those — only already-sent fares are held back.
+
+    A record from before sent_flag_ids existed (sent=True, no ids) can't
+    say which fares went out, so it's treated as "everything in that
+    day's file" — the safe direction for the one night of transition."""
+    ids, everything = set(), False
+    if not NOTIFY_HEARTBEAT_PATH.exists():
+        return ids, everything
+    with open(NOTIFY_HEARTBEAT_PATH) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            rec = json.loads(line)
+            if rec.get("as_of") != as_of.isoformat() or not rec.get("sent"):
+                continue
+            if "sent_flag_ids" in rec:
+                ids.update(rec["sent_flag_ids"])
+            else:
+                everything = True
+    return ids, everything
+
+
+def run(config=None, as_of=None, dry_run=False, test_address=None, resend=False):
     config = config or load_config()
     as_of = as_of or datetime.now(timezone.utc).date()
     # --dry-run/--test are manual and exploratory; only the unattended
     # path (what the nightly workflow actually calls) gets a heartbeat
-    # entry or a staleness check against it.
+    # entry, a staleness check, or the already-sent filter below.
     is_real_run = not dry_run and not test_address
     if is_real_run:
         check_notify_staleness(config)
@@ -650,23 +824,48 @@ def run(config=None, as_of=None, dry_run=False, test_address=None):
     weekend_flags = _load_tonight_flags(as_of, "weekend")
     holiday_flags = _load_tonight_flags(as_of, "holiday")
 
+    held_back = 0
+    if is_real_run and not resend:
+        sent_ids, everything_sent = _already_sent_flag_ids(as_of)
+        before = len(weekend_flags) + len(holiday_flags)
+        if everything_sent:
+            weekend_flags, holiday_flags = [], []
+        else:
+            weekend_flags = [f for f in weekend_flags if _flag_id("weekend", f) not in sent_ids]
+            holiday_flags = [f for f in holiday_flags if _flag_id("holiday", f) not in sent_ids]
+        held_back = before - len(weekend_flags) - len(holiday_flags)
+
+    reply_to = _load_reply_to(config)
+
     text_body, weekend_count, holiday_count = build_digest_text(
-        weekend_flags, holiday_flags, as_of, min_drop_pct
+        weekend_flags, holiday_flags, as_of, min_drop_pct, can_unsubscribe=bool(reply_to)
     )
     if text_body is None:
-        print("notify: nothing over the drop threshold tonight — nothing to send")
+        if held_back:
+            reason = "already_sent"
+            print(f"notify: {held_back} flag(s) for {as_of} were already emailed earlier today — nothing new to send (--resend to send them again)")
+        else:
+            reason = "no_flags"
+            print("notify: nothing over the drop threshold tonight — nothing to send")
         if is_real_run:
-            append_notify_heartbeat(_notify_heartbeat_record(as_of, False, "no_flags", 0, 0))
-        return {"sent": False, "reason": "no_flags", "weekend_count": 0, "holiday_count": 0}
+            append_notify_heartbeat(_notify_heartbeat_record(as_of, False, reason, 0, 0))
+        return {"sent": False, "reason": reason, "weekend_count": 0, "holiday_count": 0}
 
-    html_body, _, _ = build_digest_html(weekend_flags, holiday_flags, as_of, min_drop_pct)
+    html_body, _, _ = build_digest_html(
+        weekend_flags, holiday_flags, as_of, min_drop_pct, can_unsubscribe=bool(reply_to)
+    )
 
     if dry_run:
         PREVIEW_PATH.parent.mkdir(parents=True, exist_ok=True)
         PREVIEW_PATH.write_text(html_body, encoding="utf-8")
+        n_recipients = len(_load_recipients(config))
         print("notify: --dry-run, would send (text version):\n")
         print(text_body)
         print(f"\nnotify: HTML version written to {PREVIEW_PATH} for visual review")
+        print(
+            f"notify: would go out as {n_recipients} separate message(s), one per recipient "
+            f"(addresses not printed); Reply-To/unsubscribe line: {'on' if reply_to else 'OFF — REPLY_TO not set'}"
+        )
         return {"sent": False, "reason": "dry_run", "weekend_count": weekend_count, "holiday_count": holiday_count}
 
     parts = []
@@ -679,11 +878,14 @@ def run(config=None, as_of=None, dry_run=False, test_address=None):
     subject = f"London Flight Deals: {', '.join(parts)} {deal_word}"
 
     if test_address:
-        print(f"notify: sending ONE test email to {test_address} (not the real recipient list)")
-        send_email(config, subject, text_body, html_body, [test_address])
+        if not _valid_address(test_address):
+            raise RuntimeError("--test needs a single valid email address.")
+        print("notify: sending ONE test email (not the real recipient list)")
+        result = send_email(config, subject, text_body, html_body, [test_address], reply_to)
+        if result["failed"]:
+            raise RuntimeError(f"notify: the test send failed ({result['failures']}).")
         return {
             "sent": True,
-            "recipients": [test_address],
             "weekend_count": weekend_count,
             "holiday_count": holiday_count,
             "test": True,
@@ -695,15 +897,49 @@ def run(config=None, as_of=None, dry_run=False, test_address=None):
             f"{config['notify']['recipients_env_var']} is not set or empty "
             f"— nothing to send to."
         )
+    if not reply_to:
+        print(
+            f"notify: WARNING — {config['notify']['reply_to_env_var']} is not set, so this digest "
+            f"has no Reply-To and no unsubscribe line; replies would go nowhere. See README."
+        )
 
     print(
         f"notify: sending digest ({weekend_count} weekend, {holiday_count} holiday) "
-        f"to {len(recipients)} recipient(s)"
+        f"to {len(recipients)} recipient(s), one message each"
     )
-    send_email(config, subject, text_body, html_body, recipients)
-    if is_real_run:
-        append_notify_heartbeat(
-            _notify_heartbeat_record(as_of, True, None, weekend_count, holiday_count, len(recipients))
+    result = send_email(config, subject, text_body, html_body, recipients, reply_to)
+    if result["failed"]:
+        # Kinds and SMTP codes only — never addresses; this is a public log.
+        print(f"notify: {result['failed']} of {len(recipients)} send(s) FAILED — {result['failures']}")
+
+    delivered = result["sent"] > 0
+    shown_ids = [
+        _flag_id(product, f)
+        for product, flags in (("weekend", weekend_flags), ("holiday", holiday_flags))
+        for f in (_eligible_fares(flags, min_drop_pct) or [])
+    ]
+    append_notify_heartbeat(
+        _notify_heartbeat_record(
+            as_of,
+            delivered,
+            None if delivered else "all_sends_failed",
+            weekend_count,
+            holiday_count,
+            recipients_count=len(recipients),
+            sent_count=result["sent"],
+            failed_count=result["failed"],
+            # Only what actually went out — an all-failed night records
+            # none, so the retry isn't mistaken for a duplicate.
+            sent_flag_ids=shown_ids if delivered else None,
+        )
+    )
+    if result["failed"]:
+        # After the heartbeat, so the record exists even when this fails the
+        # step: the run reddens (the failure email is what's meant to
+        # notice) while the recipients who were reachable already have theirs.
+        raise RuntimeError(
+            f"notify: {result['failed']} of {len(recipients)} sends failed "
+            f"({result['failures']}); {result['sent']} delivered."
         )
     return {
         "sent": True,
@@ -723,9 +959,20 @@ def main():
         metavar="EMAIL",
         help="Send one real email to this address only, ignoring the real recipient list.",
     )
+    parser.add_argument(
+        "--date",
+        metavar="YYYY-MM-DD",
+        help="Use this night's flags instead of today's — to preview the format on a day that had flags (--dry-run/--test), or to replay a missed night.",
+    )
+    parser.add_argument(
+        "--resend",
+        action="store_true",
+        help="Real run only: send even fares already emailed earlier for this date (normally held back so a re-run can't double-email everyone).",
+    )
     args = parser.parse_args()
 
-    result = run(dry_run=args.dry_run, test_address=args.test)
+    as_of = date.fromisoformat(args.date) if args.date else None
+    result = run(as_of=as_of, dry_run=args.dry_run, test_address=args.test, resend=args.resend)
     print(result)
 
 

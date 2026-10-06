@@ -6,6 +6,24 @@ human needs to actually go *do*, independent of any single phase.
 
 ---
 
+## Set the REPLY_TO secret (2026-10-06) — the one step only you can do
+
+The digest now sends one message per recipient (nobody sees anyone
+else's address) and carries a "reply to say stop" line **once `REPLY_TO`
+exists**. Until then it warns in the run log and sends without one. Pick
+an inbox you read and are happy for recipients to see (a dedicated alias
+works well), then:
+
+1. Add `REPLY_TO=that@address` to your local `.env`.
+2. `gh secret set REPLY_TO --body "$(grep '^REPLY_TO=' .env | cut -d= -f2-)"`
+3. For a real look at the result: `set -a; source .env; set +a; python scripts/notify.py --test you@x.com --date 2026-10-02`
+   (`--date` picks a past night that had flags, so the preview works on a quiet day).
+
+When a "stop" reply arrives, remove that address from `NOTIFY_RECIPIENTS`
+the same way you add one (README, "Adding or removing a recipient").
+
+---
+
 ## Watch the first few real nights of Weekend/Holiday Deals (2026-09-19)
 
 **Update 2026-09-25 — this watch already paid off once.** The first four

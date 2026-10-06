@@ -218,3 +218,12 @@ notify:
   # list never belong in this committed, public file.
   password_env_var: "SMTP_PASSWORD"
   recipients_env_var: "NOTIFY_RECIPIENTS"
+  # The inbox replies and unsubscribe requests land in (2026-10-06). A
+  # secret rather than config because it's a personal address and this
+  # repo is public — and a recipient sees it in the Reply-To header, so
+  # pick something you're happy to show them. Needed because the sending
+  # domain can't receive mail: flightalert.rohit-nair.com CNAMEs to
+  # Vercel for the signup page, and a CNAME can't coexist with an MX
+  # record. Unset = digests still send, but with no Reply-To and no
+  # "reply to stop" line, and a warning in the run log.
+  reply_to_env_var: "REPLY_TO"

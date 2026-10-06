@@ -1200,3 +1200,80 @@ because both fall inside one trailing window. Five-ish weeks of real
 history exist as of this entry, nowhere near enough to design this
 properly — recorded here so it isn't rediscovered from scratch once
 there is.
+
+## Digest privacy, unsubscribe, and retry-safety (2026-10-06)
+
+Found while looking for things nobody had asked for yet, not reported by
+anyone: `send_email()` built **one** message with every recipient on the
+`To:` line and handed the full list to `sendmail()`. With one recipient
+(the owner) that was harmless; the 2026-09-24 and 2026-10-02 sends each
+went to three, so each of those three could read the other two
+addresses — and by then the public signup page meant two of them could
+plausibly be strangers to the third. Confirmed from the code
+(`msg["To"] = ", ".join(recipients)`) rather than from a received email;
+nothing about Resend's relay would have rewritten it. There was also no
+way out: no unsubscribe text in the digest, and a reply to
+`londondeals@flightalert.rohit-nair.com` had nowhere to land — that name
+CNAMEs to Vercel for the signup page, there's no MX record, and a CNAME
+can't coexist with one. (The "reply to unsubscribe" wording suggested for
+the signup page on 2026-09-22 therefore couldn't have worked as written.)
+
+**Fix, all in `notify.py`:**
+
+- **One message per recipient**, `To:` holding only that person, over a
+  single SMTP session, paced 0.6s apart (Resend allows 2 requests/second).
+  One refused address no longer blocks the rest; connection loss counts
+  everyone not yet attempted as failed rather than silently dropping them.
+- **`Reply-To` + `List-Unsubscribe: <mailto:…>`** from a new optional
+  secret, `REPLY_TO` (`notify.reply_to_env_var`) — a secret, not config,
+  because it's a personal address in a public repo and recipients will see
+  it in the header. The footer gains "reply to this one and say stop"
+  **only when `REPLY_TO` is set**: promising a reply path that doesn't
+  exist would be worse than saying nothing. Unset, digests still send
+  (the reply path was already missing, so this is no regression), with a
+  warning in the run log. `mailto:` rather than the one-click `https:`
+  form because the latter needs a live endpoint and the signup page is
+  static.
+- **Failure text never contains an address.** smtplib's own exception
+  strings include the rejected recipient, and this runs in a public repo's
+  Actions log. Failures are reduced to kinds and SMTP codes, counts are
+  printed, addresses never are — same principle as `sweep.py`'s `redact()`
+  for the token, applied to a different secret.
+- **Recipient list hygiene** (`_load_recipients()`): case-insensitive
+  de-duplication and a single-address syntax check, with counts-only
+  logging. The signup page makes both likely (someone signs up twice; a
+  stray space or quote comes along when pasting out of the Sheet).
+  `REPLY_TO` gets the same syntax check, which also closes header
+  injection through a newline in a pasted value.
+
+**One addition nobody asked for, and why:** the heartbeat now records
+`sent_flag_ids` (route + dates + price — no personal data, safe in the
+committed file) and `sent_count`/`failed_count`, and a same-day re-run
+only sends fares not already emailed. Reason: the documented way to
+replay a missed night is `workflow_dispatch` (PATTERNS.md), which on a
+night that already sent would have re-emailed every recipient the
+identical digest — and per-recipient sending makes a partial-failure retry
+*more* likely, not less. A re-run that finds genuinely new flags still
+sends those; the same itinerary at a *lower price* counts as new. A
+pre-existing heartbeat line with `sent: true` but no ids is treated as
+"everything in that day's file went out" — the safe direction for the one
+night of transition. Known limit, deliberately accepted: after a partial
+failure, a retry won't re-send to the person who failed (their address
+isn't stored anywhere to retry against, by design); the run log's failure
+count is the signal. `--resend` overrides the guard; `--date` previews or
+replays another night.
+
+**Verified:** 19 new pytest cases (`tests/test_notify_sending.py`, SMTP
+faked, every path tmp-dir'd) covering each property above, then
+**mutation-checked** — each of three bugs deliberately re-introduced
+(envelope to everyone, the already-sent filter off, a rejected address
+leaked into the failure summary) and confirmed to fail a specific test,
+file restored byte-for-byte after each. Rendered a real past night
+(2026-10-02) through `--dry-run` with placeholder values and browser-
+checked the new footer at 375px.
+
+**Not verified live, and needs one human step:** no real email has gone
+out under this code, and `REPLY_TO` isn't set yet (TODO.md) — the first
+real send will warn and carry no unsubscribe line until it is. Sending a
+real test email is deliberately left to the owner (`--test you@x.com`).
+Removal on a "stop" reply is manual, same loop as adding (README).
