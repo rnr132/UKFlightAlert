@@ -37,3 +37,4 @@
 {"run_at": "2026-11-04T11:30:34.011902+00:00", "as_of": "2026-11-04", "sent": false, "reason": "no_flags", "weekend_count": 0, "holiday_count": 0}
 {"run_at": "2026-11-05T11:27:36.638528+00:00", "as_of": "2026-11-05", "sent": true, "reason": null, "weekend_count": 0, "holiday_count": 1, "recipients_count": 3, "sent_count": 3, "failed_count": 0, "sent_flag_ids": ["holiday|LCY|REC|2026-11-16|2027-01-11|1150.0"]}
 {"run_at": "2026-11-06T11:26:26.539806+00:00", "as_of": "2026-11-06", "sent": false, "reason": "no_flags", "weekend_count": 0, "holiday_count": 0}
+{"run_at": "2026-11-07T10:39:19.559843+00:00", "as_of": "2026-11-07", "sent": false, "reason": "no_flags", "weekend_count": 0, "holiday_count": 0}
