@@ -41,3 +41,4 @@
 {"run_at": "2026-11-08T10:46:30.527797+00:00", "as_of": "2026-11-08", "sent": true, "reason": null, "weekend_count": 1, "holiday_count": 0, "recipients_count": 3, "sent_count": 3, "failed_count": 0, "sent_flag_ids": ["weekend|LCY|PSA|2026-11-20|2026-11-22|243.0"]}
 {"run_at": "2026-11-09T12:02:23.824697+00:00", "as_of": "2026-11-09", "sent": false, "reason": "no_flags", "weekend_count": 0, "holiday_count": 0}
 {"run_at": "2026-11-10T11:41:10.879564+00:00", "as_of": "2026-11-10", "sent": false, "reason": "no_flags", "weekend_count": 0, "holiday_count": 0}
+{"run_at": "2026-11-11T11:25:12.225697+00:00", "as_of": "2026-11-11", "sent": false, "reason": "no_flags", "weekend_count": 0, "holiday_count": 0}
