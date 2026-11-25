@@ -55,3 +55,4 @@
 {"run_at": "2026-11-22T11:58:32.525748+00:00", "as_of": "2026-11-22", "sent": false, "reason": "no_flags", "weekend_count": 0, "holiday_count": 0}
 {"run_at": "2026-11-23T13:35:01.214984+00:00", "as_of": "2026-11-23", "sent": true, "reason": null, "weekend_count": 1, "holiday_count": 0, "recipients_count": 3, "sent_count": 3, "failed_count": 0, "sent_flag_ids": ["weekend|LCY|BAK|2026-11-27|2026-11-30|397.0"]}
 {"run_at": "2026-11-24T14:13:05.342161+00:00", "as_of": "2026-11-24", "sent": false, "reason": "no_flags", "weekend_count": 0, "holiday_count": 0}
+{"run_at": "2026-11-25T13:25:55.602721+00:00", "as_of": "2026-11-25", "sent": false, "reason": "no_flags", "weekend_count": 0, "holiday_count": 0}
