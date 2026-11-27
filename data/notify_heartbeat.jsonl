@@ -57,3 +57,4 @@
 {"run_at": "2026-11-24T14:13:05.342161+00:00", "as_of": "2026-11-24", "sent": false, "reason": "no_flags", "weekend_count": 0, "holiday_count": 0}
 {"run_at": "2026-11-25T13:25:55.602721+00:00", "as_of": "2026-11-25", "sent": false, "reason": "no_flags", "weekend_count": 0, "holiday_count": 0}
 {"run_at": "2026-11-26T13:05:04.510939+00:00", "as_of": "2026-11-26", "sent": true, "reason": null, "weekend_count": 1, "holiday_count": 1, "recipients_count": 3, "sent_count": 3, "failed_count": 0, "sent_flag_ids": ["weekend|GLA|DUB|2026-12-11|2026-12-14|23.0", "holiday|LGW|TIA|2026-12-12|2026-12-19|36.0"]}
+{"run_at": "2026-11-27T13:02:20.938484+00:00", "as_of": "2026-11-27", "sent": true, "reason": null, "weekend_count": 0, "holiday_count": 3, "recipients_count": 3, "sent_count": 3, "failed_count": 0, "sent_flag_ids": ["holiday|LGW|ALY|2026-12-17|2027-01-20|279.0", "holiday|LGW|HOU|2026-12-18|2027-01-08|853.0", "holiday|STN|SID|2026-12-07|2026-12-21|237.0"]}
